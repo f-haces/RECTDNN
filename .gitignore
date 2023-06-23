@@ -1,3 +1,8 @@
-/data/
-/TrainDataset/
-checkpoint.pth
+data/
+TrainDataset/
+data/
+intermediate_outputs/
+TrainDataset/
+ZZZ_ScrapFiles/
+.ipynb_checkpoints/
+*.pth
