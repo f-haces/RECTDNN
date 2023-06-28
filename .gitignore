@@ -1,8 +1,8 @@
 data/
 TrainDataset/
-data/
 intermediate_outputs/
 TrainDataset/
+templates/
 ZZZ_ScrapFiles/
 .ipynb_checkpoints/
 *.pth
