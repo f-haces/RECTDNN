@@ -92,6 +92,15 @@ def reproject_geotransform(geotransform, original_crs, target_crs):
 
     return transformed_geotransform
 
+def write_world_file_from_affine(affine, filename):
+    with open(filename, 'w') as file:
+        file.write(f'{affine.a}\n')
+        file.write(f'{affine.d}\n')
+        file.write(f'{affine.b}\n')
+        file.write(f'{affine.e}\n')
+        file.write(f'{affine.c}\n')
+        file.write(f'{affine.f}\n')
+
 def get_affine_from_geotransform(geotransform):
     return Affine.from_gdal(*geotransform)
 
