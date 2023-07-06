@@ -56,6 +56,22 @@ def get_true_pixel_coordinates(raster_path, polygon=None):
 
         return np.vstack((x_out, y_out)).T
         
+def filter_points_to_unique(A, B):
+    # A=coords_gdf.geometry.tolist()
+    # B=boundary_points_matching
+    
+    # Create a set of elements in B for efficient membership checking
+    B_set = set(B)
+
+    # Use list comprehension to filter A and B simultaneously
+    A, B = zip(*[(a, b) for a, b in zip(A, B) if b not in B_set])
+
+    # Convert the filtered results back to lists if needed
+    A = list(A)
+    B = list(B)
+    
+    return A, B
+        
 def find_points_on_linestring(linestring, points):
     points_on_linestring = []
 
