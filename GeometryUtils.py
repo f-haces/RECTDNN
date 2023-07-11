@@ -21,6 +21,26 @@ from rasterio.mask import mask
 from scipy.spatial import cKDTree
 
 
+def get_true_pixel_rc(raster_path, polygon=None):
+    # Open the raster using rasterio
+    with rio.open(raster_path) as src:
+        # Mask the raster with the polygon
+        if polygon is not None:
+            data, _ = mask(src, [polygon.geometry[0]], crop=False)
+            data = data.squeeze()
+        else:
+            data = src.read(1)
+        
+        # Get the indices of all non-zero elements in the masked array
+        nonzero_indices = np.nonzero(data)        
+        
+        # Retrieve the row and column indices separately
+        rows = nonzero_indices[0]
+        columns = nonzero_indices[1]
+        
+        return columns, rows
+    
+
 def get_true_pixel_coordinates(raster_path, polygon=None):
     # Open the raster using rasterio
     with rio.open(raster_path) as src:
@@ -55,6 +75,25 @@ def get_true_pixel_coordinates(raster_path, polygon=None):
         y_out = np.array(y_out)
 
         return np.vstack((x_out, y_out)).T
+        
+def normalize_geometry(gdf, ot):
+    """
+    Warp by original transform
+    """
+    ot = ~ot
+    geometry = gdf.geometry.affine_transform([ot.a, ot.b, ot.d, ot.e, ot.c, ot.f])
+    gdf['geometry'] = geometry
+    return gdf
+    
+def getActualTransform(ot, ho):
+    """
+    Combine original transform and homography to get actual transform
+    """
+
+    ot_a = Affine.from_gdal(*ot)
+    ho = ho.flatten()
+    ho_a = Affine(*ho[:6])
+    return ot_a * ho_a
         
 def filter_points_to_unique(A, B):
     # A=coords_gdf.geometry.tolist()
