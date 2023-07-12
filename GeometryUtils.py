@@ -21,15 +21,31 @@ from rasterio.mask import mask
 from scipy.spatial import cKDTree
 
 
-def get_true_pixel_rc(raster_path, polygon=None):
+def get_true_pixel_rc(raster_path, polygon=None, preprocess=None, prep_args={}):
+        
+    if preprocess is not None:
+        with rio.open(raster_path,) as src:
+            data, secondary = preprocess(src.read(1), **prep_args)            
+            
+            # DEFINE WHERE TO SAVE PREPROCESSED IMAGE
+            output_path = raster_path[:-4] + "_prep.tif"
+            
+            # WRITE IMAGE AND WORLD FILE
+            cv2.imwrite(output_path, data)
+            # cv2.imwrite(output_path + "2.tif", secondary)
+            write_world_file_from_affine(src.transform, output_path[:-3]+"tfw")
+            
+            raster_path = output_path
+            
     # Open the raster using rasterio
-    with rio.open(raster_path) as src:
-        # Mask the raster with the polygon
+    with rio.open(raster_path,) as src:
         if polygon is not None:
             data, _ = mask(src, [polygon.geometry[0]], crop=False)
             data = data.squeeze()
         else:
             data = src.read(1)
+            
+        # cv2.imwrite("tempfiles/test.png", data)
         
         # Get the indices of all non-zero elements in the masked array
         nonzero_indices = np.nonzero(data)        
@@ -85,7 +101,22 @@ def normalize_geometry(gdf, ot):
     gdf['geometry'] = geometry
     return gdf
     
-def getActualTransform(ot, ho):
+def normalize_geometry_opt(coords, ot):
+    """
+    Warp by original transform, optimized
+    """
+    ot = np.linalg.inv(np.array(ot).reshape((3,3)))
+    
+    coords = np.hstack((coords, np.ones((coords.shape[0], 1))))
+    
+    # Apply the affine transformation to X and Y
+    coords_transformed = ot @ coords.T
+    
+    coords_transformed = coords_transformed.T
+    
+    return coords_transformed[:, :2]
+    
+def getActualTransform(ot, ho, scale=1):
     """
     Combine original transform and homography to get actual transform
     """
@@ -93,7 +124,10 @@ def getActualTransform(ot, ho):
     ot_a = Affine.from_gdal(*ot)
     ho = ho.flatten()
     ho_a = Affine(*ho[:6])
-    return ot_a * ho_a
+    first = np.array(Affine.scale(scale) * (ot_a * ho_a))
+    second = np.array(Affine.scale(1 - scale) * (ot_a))
+    final = first + second
+    return Affine(*final[:6])
         
 def filter_points_to_unique(A, B):
     # A=coords_gdf.geometry.tolist()
