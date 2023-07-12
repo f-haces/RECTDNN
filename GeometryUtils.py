@@ -20,6 +20,16 @@ import rasterio as rio
 from rasterio.mask import mask
 from scipy.spatial import cKDTree
 
+# PERSONALIZED IMPORTS
+from WorldFileUtils import *
+
+def gradeTransform(raster_path, grading_polygon):
+    with rio.open(raster_path,) as src:
+        data, _ = mask(src, [grading_polygon.geometry[0]], crop=False)
+        data = data.squeeze()
+        src.close()
+        
+    return np.count_nonzero(data)
 
 def get_true_pixel_rc(raster_path, polygon=None, preprocess=None, prep_args={}):
         
