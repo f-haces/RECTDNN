@@ -10,7 +10,6 @@ import cv2
 # DATA IMPORTS 
 import random
 import h5py
-import netCDF4 as nc
 import numpy as np
 
 # PLOTTING
@@ -180,3 +179,92 @@ class SegmentationDataset(Dataset):
         # target_image = nn.functional.one_hot(target_image).permute(0,3,1,2).squeeze()
         
         return input_image, target_image, self.image_filenames[index]
+
+def loadClasses(folder_path):
+    class_folders = os.listdir(folder_path)
+    labels = []
+    image_names = {}
+
+    # Iterate over the class folders
+    for class_folder in class_folders:
+        class_folder_path = os.path.join(folder_path, class_folder)
+        if os.path.isdir(class_folder_path):
+            image_files = os.listdir(class_folder_path)
+            # Iterate over the image files within the class folder
+            for file_name in image_files:
+                if file_name.endswith(".png"):
+                    image_names[file_name] = True
+                    labels.append(class_folder)
+
+    
+    classes = np.unique(labels)
+    outputs = list()
+    
+    for image_name in list(image_names.keys()):
+        output = None
+        for i, classification in enumerate(classes):
+            
+            fn = f"{folder_path}/{classification}/{image_name}"
+            
+            current_image = cv2.imread(fn)
+            current_image = np.asarray(current_image)
+            
+            if current_image.ndim == 3:
+                current_image = current_image[:, :, 0]
+            
+            if output is None:
+                output = np.zeros(current_image.shape)
+            
+            output = np.where(current_image > 0, i+1, output)
+        outputs.append(Image.fromarray(output))
+
+    return outputs
+
+
+class SegmentationDataset_Multiclass(Dataset):
+    def __init__(self, input_folder, target_folder, transform=None, crop=True):
+        self.input_folder = input_folder
+        self.target_folder = target_folder         
+        self.transform = transform
+        self.crop = crop
+        self.image_filenames = os.listdir(input_folder)      
+        self.images = list()        
+        
+        for fn in self.image_filenames:
+            image = Image.open(os.path.join(self.input_folder, fn)).convert('L')
+            image = Image.fromarray(np.array(image).astype(np.uint8))
+            self.images.append(image)
+            
+        self.targets = loadClasses(self.target_folder)
+        
+    def __len__(self):
+        return len(self.image_filenames)
+
+    def __getitem__(self, index):
+        # input_path = os.path.join(self.input_folder, self.image_filenames[index])
+        
+        input_image = self.images[index]        
+        target_image = self.targets[index]
+        
+        
+        # Apply the same random transformation to both image
+        seed = np.random.randint(2147483647)            
+        if self.transform is not None:
+            
+            random.seed(seed)
+            torch.manual_seed(seed)
+            input_image = self.transform(input_image)            
+            random.seed(seed)
+            torch.manual_seed(seed)
+            target_image = self.transform(target_image)
+            
+        if self.crop:
+            sample = {'image': input_image, 'target': target_image}
+            croptrans = transforms.Compose([RandomCrop((1024, 1024))])
+            sample_transformed = croptrans(sample)
+            input_image, target_image = sample_transformed['image'], sample_transformed['target']
+        
+        target_image = target_image.to(torch.long).squeeze()
+        
+        return input_image, target_image, self.image_filenames[index]
+
