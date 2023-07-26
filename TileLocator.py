@@ -170,7 +170,7 @@ class SegmentationDataset(Dataset):
             
         if self.crop:
             sample = {'image': input_image, 'target': target_image}
-            croptrans = transforms.Compose([RandomCrop((1024, 1024))])
+            croptrans = transforms.Compose([RandomCrop((512, 512))])
             sample_transformed = croptrans(sample)
             input_image, target_image = sample_transformed['image'], sample_transformed['target']
         
@@ -268,3 +268,68 @@ class SegmentationDataset_Multiclass(Dataset):
         
         return input_image, target_image, self.image_filenames[index]
 
+def split_and_run_cnn(image_path, model, tilesize=2048):
+        
+    tensor = transforms.Compose([
+        transforms.ToTensor(),
+    ])
+    
+    # Load the image
+    image = Image.open(image_path)
+    
+    # Calculate the number of tiles needed
+    width, height = image.size
+    num_tiles_x = (width + tilesize-1) // tilesize
+    num_tiles_y = (height + tilesize-1) // tilesize
+    
+    # Create an empty list to store the output tiles
+    output_tiles = []
+    
+    output_gen = np.zeros((width, height))
+    
+    # Iterate over each tile
+    for tile_x in tqdm(range(num_tiles_x)):
+        for tile_y in range(num_tiles_y):
+                        
+            # Calculate the coordinates for the current tile
+            x0 = tile_x * tilesize
+            y0 = tile_y * tilesize
+            x1 = min(x0 + tilesize, width)
+            y1 = min(y0 + tilesize, height)
+            
+            # Crop the image to the current tile
+            tile = image.crop((x0, y0, x1, y1))
+            
+            # Pad the tile if needed
+            pad_width = tilesize - tile.width
+            pad_height = tilesize - tile.height
+            if pad_width > 0 or pad_height > 0:
+                padding = ((0, pad_height), (0, pad_width))
+                tile = np.pad(tile, padding, mode='constant')
+            
+            # Preprocess the tile
+            tile = np.array(tile)
+            
+            if np.max(tile) == 1:
+                tile = tile * 255
+            
+            tile = np.where(tile > 127, 255, 0).astype(np.uint8)
+            
+            tile_tensor = tensor(tile).unsqueeze(0).to("cuda")
+            
+            # Run the CNN on the tile
+            output = model(tile_tensor)
+            
+            output = output[0, 1, :, :].cpu().detach().numpy().T
+            
+            # Store the output tile
+            
+            x_fin = tilesize - pad_width
+            y_fin = tilesize - pad_height
+            
+            temp = output[0:x_fin, 0:y_fin]
+            
+            
+            output_gen[x0:x1, y0:y1] = temp
+        torch.cuda.empty_cache()
+    return output_gen.T
