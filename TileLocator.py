@@ -170,7 +170,7 @@ class SegmentationDataset(Dataset):
             
         if self.crop:
             sample = {'image': input_image, 'target': target_image}
-            croptrans = transforms.Compose([RandomCrop((512, 512))])
+            croptrans = transforms.Compose([RandomCrop((256, 256))])
             sample_transformed = croptrans(sample)
             input_image, target_image = sample_transformed['image'], sample_transformed['target']
         
@@ -214,6 +214,7 @@ def loadClasses(folder_path):
             
             if output is None:
                 output = np.zeros(current_image.shape)
+            
             
             output = np.where(current_image > 0, i+1, output)
         outputs.append(Image.fromarray(output))

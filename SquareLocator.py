@@ -28,10 +28,8 @@ import torch.optim.lr_scheduler as lr_scheduler
 import torchvision.models as models
 
 class SquareLocator(nn.Module):
-    def __init__(self, num_classes=2, processing_size=(2048, 2048)):
+    def __init__(self, num_classes=2, finalpadding=0):
         super(SquareLocator, self).__init__()
-        
-        self.prep_transform = transforms.Compose([transforms.Resize(processing_size)])
         
         self.softmax = nn.Softmax()
         
@@ -60,7 +58,7 @@ class SquareLocator(nn.Module):
         self.decoder1 = self._make_decoder_block(128, 64, 64, s=4)
         
         # Final convolutional layer
-        self.final_conv = nn.Conv2d(64, num_classes, kernel_size=1)
+        self.final_conv = nn.Conv2d(64, num_classes, kernel_size=1, padding=finalpadding)
         
     def _make_decoder_block(self, in_channels, mid_channels, out_channels, s=2):
         return nn.Sequential(
@@ -71,11 +69,9 @@ class SquareLocator(nn.Module):
         )
         
     def forward(self, x, resize=True):
-        
-        x_prep = torch.stack([self.prep_transform(img) for img in x])
-        
+                
         # Encoder
-        enc1 = self.encoder1(x_prep)
+        enc1 = self.encoder1(x)
         enc2 = self.encoder2(enc1)
         enc3 = self.encoder3(enc2)
         enc4 = self.encoder4(enc3)
@@ -224,6 +220,9 @@ def loadClasses(folder_path, fns=None):
             if output is None:
                 output = np.zeros(current_image.shape)
             
+            
+            print(np.count_nonzero(current_image))
+            
             output = np.where(current_image > 0, i+1, output)
         outputs.append(Image.fromarray(output))
 
@@ -279,6 +278,9 @@ class SquareDataset_Multiclass(Dataset):
         else:
             self.images  = self.images_unscaled
             self.targets = self.targets_unscaled
+            
+        delattr(self, "images_unscaled")
+        delattr(self, "targets_unscaled")
         
         
     def __len__(self):
