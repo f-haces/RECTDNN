@@ -95,6 +95,21 @@ class SquareLocator(nn.Module):
         
         return output
 
+class RandomScaleTransform:
+    def __init__(self, min_scale_height, max_scale_height, min_scale_width, max_scale_width):
+        self.min_scale_height = min_scale_height
+        self.max_scale_height = max_scale_height
+        self.min_scale_width = min_scale_width
+        self.max_scale_width = max_scale_width
+
+    def __call__(self, img):
+        scale_factor_height = random.uniform(self.min_scale_height, self.max_scale_height)
+        scale_factor_width = random.uniform(self.min_scale_width, self.max_scale_width)
+        width, height = img.size
+        new_width = int(width * scale_factor_width)
+        new_height = int(height * scale_factor_height)
+        img = img.resize((new_width, new_height), Image.BILINEAR)
+        return img
 
 class RandomCrop(object):
     def __init__(self, size):
@@ -123,62 +138,6 @@ class RandomCrop(object):
             target = target_i[:, i:i+new_h, j:j+new_w]
 
         return {'image': img, 'target': target}
-
-class SegmentationDataset(Dataset):
-    def __init__(self, input_folder, target_folder, transform=None, crop=True):
-        self.input_folder = input_folder
-        self.target_folder = target_folder         
-        self.transform = transform
-        self.crop = crop
-        self.image_filenames = os.listdir(input_folder)      
-        self.images = list()
-        self.targets = list()
-        
-        for fn in self.image_filenames:
-            image = Image.open(os.path.join(self.input_folder, fn)).convert('L')
-            image = Image.fromarray(np.array(image).astype(np.uint8))
-            self.images.append(image)
-            
-        for fn in self.image_filenames:
-            print(os.path.join(self.target_folder, fn))
-            target = Image.open(os.path.join(self.target_folder, fn)).convert('L')
-            
-            target = np.asarray(np.array(target).astype(np.uint8))
-            target = Image.fromarray(target)
-            
-            # np.dstack(target)
-            self.targets.append(target)
-
-    def __len__(self):
-        return len(self.image_filenames)
-
-    def __getitem__(self, index):
-        # input_path = os.path.join(self.input_folder, self.image_filenames[index])
-        
-        input_image = self.images[index]        
-        target_image = self.targets[index]
-        
-        
-        # Apply the same random transformation to both image
-        seed = np.random.randint(2147483647)            
-        if self.transform is not None:
-            
-            random.seed(seed)
-            torch.manual_seed(seed)
-            input_image = self.transform(input_image)            
-            random.seed(seed)
-            torch.manual_seed(seed)
-            target_image = self.transform(target_image)
-            
-        if self.crop:
-            sample = {'image': input_image, 'target': target_image}
-            croptrans = transforms.Compose([RandomCrop((512, 512))])
-            sample_transformed = croptrans(sample)
-            input_image, target_image = sample_transformed['image'], sample_transformed['target']
-        
-        target_image = torch.where(target_image > 0, 1, 0).to(torch.long).squeeze()
-        
-        return input_image, target_image, self.image_filenames[index]
 
 def loadClasses(folder_path, fns=None):
     class_folders = os.listdir(folder_path)
@@ -221,8 +180,6 @@ def loadClasses(folder_path, fns=None):
                 output = np.zeros(current_image.shape)
             
             
-            print(np.count_nonzero(current_image))
-            
             output = np.where(current_image > 0, i+1, output)
         outputs.append(Image.fromarray(output))
 
@@ -234,6 +191,7 @@ def dynamic_pad_resize(images, target_size):
 
     padded_images = []
     masks = []
+    shapes = []
     for img in images:
         
         height, width = np.asarray(img).shape[:2]
@@ -251,8 +209,9 @@ def dynamic_pad_resize(images, target_size):
 
         padded_images.append(Image.fromarray(resized_img))
         masks.append(Image.fromarray(mask))
+        shapes.append((height, width))
 
-    return padded_images, masks, (height, width)
+    return padded_images, masks, shapes
 
 class SquareDataset_Multiclass(Dataset):
     def __init__(self, input_folder, target_folder, transform=None, crop=True, resize=False, resize_def=2048):
@@ -279,8 +238,8 @@ class SquareDataset_Multiclass(Dataset):
             self.images  = self.images_unscaled
             self.targets = self.targets_unscaled
             
-        delattr(self, "images_unscaled")
-        delattr(self, "targets_unscaled")
+        # delattr(self, "images_unscaled")
+        # delattr(self, "targets_unscaled")
         
         
     def __len__(self):
@@ -301,7 +260,10 @@ class SquareDataset_Multiclass(Dataset):
             input_image = self.transform(input_image)            
             random.seed(seed)
             torch.manual_seed(seed)
-            target_image = self.transform(target_image)
+            if np.max(np.asarray(target_image)) == 1:
+                target_image = self.transform(target_image) * 255
+            else:
+                target_image = self.transform(target_image)
             
         if self.crop:
             sample = {'image': input_image, 'target': target_image}
@@ -312,6 +274,7 @@ class SquareDataset_Multiclass(Dataset):
         target_image = target_image.to(torch.long).squeeze()
         
         return input_image.float(), target_image, self.image_filenames[index]
+
 def split_and_run_cnn(image_path, model, tilesize=2048):
         
     tensor = transforms.Compose([
