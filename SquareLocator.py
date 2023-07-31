@@ -108,7 +108,8 @@ class RandomScaleTransform:
         width, height = img.size
         new_width = int(width * scale_factor_width)
         new_height = int(height * scale_factor_height)
-        img = img.resize((new_width, new_height), Image.BILINEAR)
+        new_img = img.resize((new_width, new_height), Image.BILINEAR)
+        # img = np.zeros((width, height))
         return img
 
 class RandomCrop(object):
@@ -212,6 +213,22 @@ def dynamic_pad_resize(images, target_size):
         shapes.append((height, width))
 
     return padded_images, masks, shapes
+    
+def dynamic_resize(images, target_size):
+    
+    output = list()
+    
+    for img in images: 
+        
+        img = np.asarray(img)
+        height, width = img.shape[:2]
+
+        # Resize the padded image to the target size
+        resized_img = cv2.resize(img, target_size)
+        
+        output.append(Image.fromarray(resized_img))
+
+    return output
 
 class SquareDataset_Multiclass(Dataset):
     def __init__(self, input_folder, target_folder, transform=None, crop=True, resize=False, resize_def=2048):
@@ -232,8 +249,11 @@ class SquareDataset_Multiclass(Dataset):
         self.targets_unscaled = loadClasses(self.target_folder, fns=self.image_filenames)
         
         if resize:
-            self.images, self.masks, self.original_shapes  = dynamic_pad_resize(self.images_unscaled, (resize_def, resize_def))
-            self.targets, _ , _ = dynamic_pad_resize(self.targets_unscaled, (resize_def, resize_def))
+            # self.images, self.masks, self.original_shapes  = dynamic_pad_resize(self.images_unscaled, (resize_def, resize_def))
+            # self.targets, _ , _ = dynamic_pad_resize(self.targets_unscaled, (resize_def, resize_def))
+            
+            self.images = dynamic_resize(self.images_unscaled, (resize_def, resize_def))
+            self.targets = dynamic_resize(self.targets_unscaled, (resize_def, resize_def))
         else:
             self.images  = self.images_unscaled
             self.targets = self.targets_unscaled
@@ -260,8 +280,8 @@ class SquareDataset_Multiclass(Dataset):
             input_image = self.transform(input_image)            
             random.seed(seed)
             torch.manual_seed(seed)
-            if np.max(np.asarray(target_image)) == 1:
-                target_image = self.transform(target_image) * 255
+            if np.max(np.asarray(target_image)) == 255:
+                target_image = self.transform(target_image)
             else:
                 target_image = self.transform(target_image)
             
