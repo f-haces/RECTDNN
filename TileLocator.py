@@ -28,7 +28,7 @@ import torch.optim.lr_scheduler as lr_scheduler
 import torchvision.models as models
 
 class RectangleClass(nn.Module):
-    def __init__(self, num_classes=2, ):
+    def __init__(self, num_classes=2, finalpadding=0):
         super(RectangleClass, self).__init__()
         
         self.softmax = nn.Softmax()
@@ -58,7 +58,7 @@ class RectangleClass(nn.Module):
         self.decoder1 = self._make_decoder_block(128, 64, 64, s=4)
         
         # Final convolutional layer
-        self.final_conv = nn.Conv2d(64, num_classes, kernel_size=1)
+        self.final_conv = nn.Conv2d(64, num_classes, kernel_size=1, padding=finalpadding)
         
     def _make_decoder_block(self, in_channels, mid_channels, out_channels, s=2):
         return nn.Sequential(
@@ -192,9 +192,8 @@ def loadClasses(folder_path):
             image_files = os.listdir(class_folder_path)
             # Iterate over the image files within the class folder
             for file_name in image_files:
-                if file_name.endswith(".png"):
-                    image_names[file_name] = True
-                    labels.append(class_folder)
+                image_names[file_name] = True
+                labels.append(class_folder)
 
     
     classes = np.unique(labels)
