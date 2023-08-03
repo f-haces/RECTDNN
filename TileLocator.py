@@ -268,7 +268,14 @@ class SegmentationDataset_Multiclass(Dataset):
         
         return input_image, target_image, self.image_filenames[index]
 
-def split_and_run_cnn(image_path, model, tilesize=2048):
+def bomb_edges(image, size=2):
+    image[:,  0:size] = 0
+    image[:, -size:] = 0
+    image[0:size, :] = 0
+    image[-size:, :] = 0
+    return image
+
+def split_and_run_cnn(image_path, model, tilesize=2048, ):
         
     tensor = transforms.Compose([
         transforms.ToTensor(),
@@ -276,6 +283,9 @@ def split_and_run_cnn(image_path, model, tilesize=2048):
     
     # Load the image
     image = Image.open(image_path)
+    
+    if np.asarray(image).ndim == 3:
+        image = Image.fromarray(np.asarray(image)[:,:,0])
     
     # Calculate the number of tiles needed
     width, height = image.size
@@ -288,7 +298,7 @@ def split_and_run_cnn(image_path, model, tilesize=2048):
     output_gen = np.zeros((width, height))
     
     # Iterate over each tile
-    for tile_x in tqdm(range(num_tiles_x)):
+    for tile_x in range(num_tiles_x):
         for tile_y in range(num_tiles_y):
                         
             # Calculate the coordinates for the current tile
@@ -313,17 +323,20 @@ def split_and_run_cnn(image_path, model, tilesize=2048):
             if np.max(tile) == 1:
                 tile = tile * 255
             
-            tile = np.where(tile > 127, 255, 0).astype(np.uint8)
+            # tile = np.where(tile > 127, 255, 0).astype(np.uint8)
+            
+            tile = tile.astype(np.uint8)
             
             tile_tensor = tensor(tile).unsqueeze(0).to("cuda")
             
             # Run the CNN on the tile
             output = model(tile_tensor)
             
-            output = output[0, 1, :, :].cpu().detach().numpy().T
+            output = output[0, 0, :, :].cpu().detach().numpy().T
+            # POSTPROCESS 
+            output = bomb_edges(output)
             
             # Store the output tile
-            
             x_fin = tilesize - pad_width
             y_fin = tilesize - pad_height
             
