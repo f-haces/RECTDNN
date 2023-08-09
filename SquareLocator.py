@@ -350,7 +350,6 @@ def split_and_run_cnn(image_path, model, tilesize=2048):
             output = output[0, 1, :, :].cpu().detach().numpy().T
             
             # Store the output tile
-            
             x_fin = tilesize - pad_width
             y_fin = tilesize - pad_height
             
