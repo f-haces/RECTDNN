@@ -268,15 +268,26 @@ class SegmentationDataset_Multiclass(Dataset):
         
         return input_image, target_image, self.image_filenames[index]
 
-def bomb_edges(image, size=2):
-    image[:,  0:size] = 0
-    image[:, -size:] = 0
-    image[0:size, :] = 0
-    image[-size:, :] = 0
+def bomb_edges(image, size=2, dims=[0,1,2]):
+    image[:, 0:size, dims] = 255
+    image[:, -size:, dims] = 255
+    image[0:size, :, dims] = 255
+    image[-size:, :, dims] = 255
+    
+    c = np.setdiff1d([0,1,2], dims)
+    image[:, 0:size, c] = 0
+    image[:, -size:, c] = 0
+    image[0:size, :, c] = 0
+    image[-size:, :, c] = 0
+    
     return image
 
-def split_and_run_cnn(image_path, model, tilesize=2048, ):
-        
+def split_and_run_cnn(image_path, model, tilesize=2048, num_dim=3, edges=3, dims_rep=None):
+
+    if dims_rep is None:
+        dims_rep=np.arange(num_dim)
+
+    print(dims_rep)
     tensor = transforms.Compose([
         transforms.ToTensor(),
     ])
@@ -287,6 +298,7 @@ def split_and_run_cnn(image_path, model, tilesize=2048, ):
     if np.asarray(image).ndim == 3:
         image = Image.fromarray(np.asarray(image)[:,:,0])
     
+    
     # Calculate the number of tiles needed
     width, height = image.size
     num_tiles_x = (width + tilesize-1) // tilesize
@@ -295,10 +307,10 @@ def split_and_run_cnn(image_path, model, tilesize=2048, ):
     # Create an empty list to store the output tiles
     output_tiles = []
     
-    output_gen = np.zeros((width, height))
+    output_gen = np.zeros((width, height, num_dim))
     
     # Iterate over each tile
-    for tile_x in range(num_tiles_x):
+    for tile_x in tqdm(range(num_tiles_x)):
         for tile_y in range(num_tiles_y):
                         
             # Calculate the coordinates for the current tile
@@ -327,22 +339,24 @@ def split_and_run_cnn(image_path, model, tilesize=2048, ):
             
             tile = tile.astype(np.uint8)
             
+            
             tile_tensor = tensor(tile).unsqueeze(0).to("cuda")
             
             # Run the CNN on the tile
             output = model(tile_tensor)
             
-            output = output[0, 0, :, :].cpu().detach().numpy().T
+            output = output[0, :, :, :].cpu().detach().numpy().T
+            
             # POSTPROCESS 
-            output = bomb_edges(output)
+            if edges != 0:
+                output = bomb_edges(output, size=edges, dims=dims_rep)
             
             # Store the output tile
             x_fin = tilesize - pad_width
             y_fin = tilesize - pad_height
             
-            temp = output[0:x_fin, 0:y_fin]
+            temp = output[0:x_fin, 0:y_fin, :]
             
-            
-            output_gen[x0:x1, y0:y1] = temp
+            output_gen[x0:x1, y0:y1, :] = temp
         torch.cuda.empty_cache()
-    return output_gen.T
+    return output_gen
