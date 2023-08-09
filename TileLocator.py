@@ -260,7 +260,7 @@ class SegmentationDataset_Multiclass(Dataset):
             
         if self.crop:
             sample = {'image': input_image, 'target': target_image}
-            croptrans = transforms.Compose([RandomCrop((1024, 1024))])
+            croptrans = transforms.Compose([RandomCrop((256, 256))])
             sample_transformed = croptrans(sample)
             input_image, target_image = sample_transformed['image'], sample_transformed['target']
         
