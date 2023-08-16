@@ -282,18 +282,17 @@ def bomb_edges(image, size=2, dims=[0,1,2]):
     
     return image
 
-def split_and_run_cnn(image_path, model, tilesize=2048, num_dim=3, edges=3, dims_rep=None):
+def split_and_run_cnn(image, model, tilesize=2048, num_dim=3, edges=3, dims_rep=None):
 
     if dims_rep is None:
         dims_rep=np.arange(num_dim)
 
-    print(dims_rep)
     tensor = transforms.Compose([
         transforms.ToTensor(),
     ])
     
     # Load the image
-    image = Image.open(image_path)
+    # image = Image.open(image_path)
     
     if np.asarray(image).ndim == 3:
         image = Image.fromarray(np.asarray(image)[:,:,0])
