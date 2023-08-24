@@ -1,5 +1,5 @@
 # PYTHON IMPORTS
-import os, copy, math
+import os, copy, math, re
 from tqdm.notebook import trange, tqdm
 
 # IMAGE IMPORTS 
@@ -18,6 +18,7 @@ import matplotlib.cm as cm
 import torch
 
 # SHAPES IMPORTS
+import geopandas as gpd
 from shapely.ops import unary_union
 from shapely.geometry import LineString
 
@@ -302,3 +303,118 @@ def linestrings_to_lines(linestrings):
         x1, y1 = linestring.coords[-1]
         lines.append([x0, y0, x1, y1])
     return lines
+
+def draw_lines_to_image(lines, image_size, line_color=(255), background_color=(0)):
+    """
+    Draw lines on an image using ImageDraw.
+
+    Args:
+        lines (list): List of lines, where each line is defined as (x0, y0, x1, y1).
+        image_size (tuple): Size of the output image (width, height).
+        line_color (tuple): Color of the lines (R, G, B).
+        background_color (tuple): Background color of the image (R, G, B).
+
+    Returns:
+        Image: PIL Image object with the drawn lines.
+    """
+    # Create a new image with the specified background color
+    image = Image.new("L", image_size, background_color)
+    
+    # Initialize ImageDraw object
+    draw = ImageDraw.Draw(image)
+    
+    # Draw each line on the image
+    for x0, y0, x1, y1 in lines:
+        draw.line((x0, y0, x1, y1), fill=line_color)
+    
+    return np.asarray(image)
+    
+    
+def get_overlapping_lines(lines_or, image_or, threshold, processing_size=2048):
+    
+    scale = processing_size / np.max(list(image_or.shape))
+    scale_x, scale_y = scale, scale
+    processing_size = (int(image_or.shape[1] * scale), int(image_or.shape[0] * scale))
+    
+    image = cv2.dilate(np.array(image_or).astype(np.uint8), np.ones((3,3), np.uint8), iterations=3)
+    image = cv2.resize(image.astype(np.float32), processing_size, cv2.INTER_AREA)
+    image = np.where(np.array(image) > 0, 1, 0).astype(np.uint8)
+    
+    cv2.imwrite("tempfiles/test.png", image * 255)
+    
+    lines = rescale_lines(lines_or, scale_x, scale_y)
+    
+    # Create an empty image to mark overlapping regions
+    overlap_image = np.full(image.shape, 0)
+    overlap_image_fr = Image.fromarray(overlap_image.copy().astype(np.uint8))
+    
+    # Loop through each line
+    overlapping_lines = []
+    overlapping_values = []
+    
+    for i, line in tqdm(enumerate(lines), total=len(lines)):
+                
+        x1, y1, x2, y2 = [int(x) for x in line]
+        line_image = overlap_image_fr.copy()
+        line_draw = ImageDraw.Draw(line_image)
+        line_draw.line((x1, y1, x2, y2), fill=1, width=5)
+        
+        line_image_thresh = overlap_image_fr.copy()
+        line_draw = ImageDraw.Draw(line_image_thresh)
+        line_draw.line((x1, y1, x2, y2), fill=1, width=1)
+        
+        overlap = np.logical_and(image, line_image)
+        overlap_count = np.count_nonzero(overlap)
+        threshold_pixels = np.count_nonzero(line_image_thresh) * threshold
+        threshold_pixels = threshold_pixels if threshold_pixels != 0 else 1
+        
+        # if True:# overlap_count >= threshold_pixels // 2:
+        #     test = np.dstack((image, line_image, line_image_thresh))
+        #     plt.imsave(f"tempfiles/test{i}.png", test * 255)
+        
+        if overlap_count >= threshold_pixels:
+            overlapping_lines.append(lines_or[i])
+            
+        overlapping_values.append(overlap_count / threshold_pixels)
+        
+    return overlapping_lines, overlapping_values
+
+def find_word_with_key(text, key):
+    pattern = r'\b\w*' + re.escape(key) + r'\w*\b'  # Regular expression pattern
+    match = re.search(pattern, text, flags=re.IGNORECASE)
+    if match:
+        return match.group()
+    else:
+        return None
+        
+def simplifyShapelyPolygon(polygon, tolerance = .1):
+    """ Simplify a polygon with shapely.
+    Polygon: ndarray
+        ndarray of the polygon positions of N points with the shape (N,2)
+    tolerance: float
+        the tolerance
+    """
+    poly = shapely.geometry.Polygon(i)
+    poly_s = poly.simplify(tolerance=tolerance)
+    # convert it back to numpy
+    return np.array(poly_s.boundary.coords[:])
+    
+    
+def create_shapefile_from_dict(data_dict, output_shapefile):
+    # Create a list to store the features
+    features = []
+    
+    # Iterate through the dictionary and convert polygons to GeoJSON-like features
+    for name, polygon in data_dict.items():
+        feature = {
+            "type": "Feature",
+            "properties": {"name": name},
+            "geometry": polygon.__geo_interface__
+        }
+        features.append(feature)
+    
+    # Create a GeoDataFrame from the features
+    gdf = gpd.GeoDataFrame.from_features(features)
+    
+    # Save the GeoDataFrame as a shapefile
+    gdf.to_file(output_shapefile)
