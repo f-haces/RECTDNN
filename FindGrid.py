@@ -1,6 +1,7 @@
 # PYTHON IMPORTS
 import os, copy, math, re
 from tqdm.notebook import trange, tqdm
+from fuzzywuzzy import fuzz
 
 # IMAGE IMPORTS 
 from PIL import Image, ImageDraw
@@ -19,8 +20,17 @@ import torch
 
 # SHAPES IMPORTS
 import geopandas as gpd
-from shapely.ops import unary_union
-from shapely.geometry import LineString
+from shapely.ops import unary_union, split
+from shapely.geometry import LineString, Polygon, Point
+
+# OCR libraries
+import pytesseract
+from fuzzywuzzy import fuzz
+import re
+
+# INITIALIZE
+t_path = r'C:\Users\fhacesga\AppData\Local\Programs\Tesseract-OCR\tesseract.exe'
+pytesseract.pytesseract.tesseract_cmd = t_path
 
 # MY OWN CLASSES
 from TileLocator import *
@@ -144,9 +154,11 @@ def extend_lines(lines, percentage):
 
     return np.array(extended_lines).astype(int)
 
-def plotLines(original_image, lines, ax=None, mask=None, color=(0, 0, 255), fig_size=(15, 15)):
-    if ax is None:
+def plotLines(original_image, lines, fig=None, mask=None, color=(0, 0, 255), fig_size=(15, 15), savedir=None):
+    if fig is None:
         fig, ax = plt.subplots(figsize=fig_size)
+    else:
+        ax = fig.axes
         
     image_with_lines = original_image.copy()
     for line in lines:
@@ -167,7 +179,11 @@ def plotLines(original_image, lines, ax=None, mask=None, color=(0, 0, 255), fig_
     ax.scatter(line_arry[:, 0], line_arry[:, 1])
     ax.scatter(line_arry[:, 2], line_arry[:, 3])
     ax.imshow(image_with_lines)
-    return ax
+    
+    if savedir is not None:
+        fig.savefig(savedir)
+    
+    return fig
 
 def calculate_scale_factors_small(original_size, target_size):
     scale_x = target_size[0] / original_size[0]
@@ -330,17 +346,19 @@ def draw_lines_to_image(lines, image_size, line_color=(255), background_color=(0
     return np.asarray(image)
     
     
-def get_overlapping_lines(lines_or, image_or, threshold, processing_size=2048):
+def get_overlapping_lines(lines_or, image_or, threshold, processing_size=2400):
     
     scale = processing_size / np.max(list(image_or.shape))
     scale_x, scale_y = scale, scale
     processing_size = (int(image_or.shape[1] * scale), int(image_or.shape[0] * scale))
     
-    image = cv2.dilate(np.array(image_or).astype(np.uint8), np.ones((3,3), np.uint8), iterations=3)
-    image = cv2.resize(image.astype(np.float32), processing_size, cv2.INTER_AREA)
-    image = np.where(np.array(image) > 0, 1, 0).astype(np.uint8)
+    # image = cv2.dilate(np.array(image_or).astype(np.uint8), np.ones((3,3), np.uint8), iterations=3)
+    # image = cv2.resize(image.astype(np.float32), processing_size, cv2.INTER_AREA)
+    # image = np.where(np.array(image) > 0, 1, 0).astype(np.uint8)
     
-    cv2.imwrite("tempfiles/test.png", image * 255)
+    image = cv2.dilate(np.array(image_or).astype(np.uint8), np.ones((3,3), np.uint8), iterations=3)
+    image = cv2.resize(image.astype(np.uint8), processing_size)
+    cv2.imwrite("tempfiles/test.png", image)
     
     lines = rescale_lines(lines_or, scale_x, scale_y)
     
@@ -418,3 +436,337 @@ def create_shapefile_from_dict(data_dict, output_shapefile):
     
     # Save the GeoDataFrame as a shapefile
     gdf.to_file(output_shapefile)
+    
+    
+def find_word_with_key(text, key, threshold=80, verbose=True):
+    if verbose:
+        print("____________________________________") 
+    words = re.findall(r'\b\w+\b', text)  # Extract words from the text
+    if verbose:
+        print(words)
+    
+    best_match = None
+    similarities = []
+    for word in words:
+        # FILTER OUT SINGLE NUMBER MATCHES (ie 4 FOR 248201)
+        if len(word) < len(key):
+            similarities.append(0)
+            continue
+            
+        # GET SIMILARITY RATIO
+        similarity = fuzz.partial_ratio(key.lower(), word.lower())
+        similarities.append(similarity)
+        
+    similarities = np.array(similarities)
+
+    # Find the maximum value in the array
+    max_value = np.max(similarities)
+    
+    if max_value < threshold:
+        return None
+    
+    # Find the indices where the maximum value occurs
+    max_indices = np.where(similarities == max_value)[0]
+        
+    matches = []
+    
+    for idx in max_indices:
+        if len(words[idx]) == len(key) and idx+1 != len(words):
+            matches.append(f"{words[idx]+words[idx+1]}")
+        else:
+            matches.append(f"{words[idx]}")
+    
+    if len(matches) == 1:
+        return matches[0]
+        
+    else:
+        return matches
+        
+
+def pad_image_with_percentage(image, width_padding_percent, height_padding_percent):
+    original_height, original_width = image.shape[:2]
+    
+    width_padding = int(original_width * (width_padding_percent / 100))
+    height_padding = int(original_height * (height_padding_percent / 100))
+    
+    padded_image = cv2.copyMakeBorder(image, height_padding, height_padding, width_padding, width_padding, cv2.BORDER_CONSTANT, value=255)
+    
+    return padded_image
+    
+def line_detection(classifications, effectiveArea, image,
+                   target_dim=(2400, 2400),   # PROCESSING RESOLUTION
+                   threshold=10/255,          # INITIAL THRESHOLDING BARRIER
+                   degree_resolution=25,      # HOUGH LINES TRANSFORM - HOW MANY SUBDIVISIONS TO A DEGREE
+                   line_length=50,            # HOUGH LINES TRANSFORM - HOW MANY LINES 
+                   extend_percent=15,         # EXTEND PERCENT FOR LINES POST RECOGNITION
+                   certainty=.90
+                  ):
+    # RESIZE INPUTS TO TARGET RESOLUTION
+    effectiveArea_resized = cv2.resize(effectiveArea[:, :, 1], target_dim)
+    resized_image = cv2.resize(classifications, target_dim, interpolation=cv2.INTER_AREA)
+    
+    # THRESHOLD IMAGES
+    # gray = np.logical_or(resized_image[:, :, 1].T > threshold, resized_image[:, :, 2].T > threshold) * 255
+    # gray = np.logical_or(resized_image[:, :, 1].T > threshold, 
+    #     resized_image[:, :, 2].T * (1 - certainty)> threshold) * 255
+    gray = (resized_image[:, :, 2].T > threshold) * 255
+    gray = gray.astype(np.uint8)
+    
+    # CONSIDER ADDING SOME LOGIC BY WHICH, INSTEAD OF ONLY USING THE LINE CLASSIFICATIONS
+    # WE MIX BOTH AFTER HOUGH LINES P (SO WE USE THE LINES FROM JUST THE ROADS TO FILTER OUT THE COMBINED)
+    
+    # LINE THINNING AND RETHRESHOLDING
+    gray = cv2.ximgproc.thinning(gray, thinningType=cv2.ximgproc.THINNING_GUOHALL)
+    # gray = np.where(effectiveArea_resized > 0, gray, 0)
+    
+    # HOUGH TRANSFORMS
+    lines = cv2.HoughLinesP(gray, rho=1, theta=np.pi/ (180 * degree_resolution), 
+                            threshold=100, 
+                            minLineLength= line_length * 2, 
+                            maxLineGap= line_length // 2)
+
+    # UNPACK LINES FROM ADDITIONAL DIMENSION THAT CV2 RETURNS THEM FROM
+    lines = [line[0] for line in lines]
+
+    # DRAW LINES ON IMAGE
+    image_with_lines = np.zeros((resized_image.shape[0], resized_image.shape[1], 3))
+
+    for line in lines:
+        x1, y1, x2, y2 = line
+
+        colors = np.random.randint(255, size=3).astype(np.int32)
+        color = (int(colors[0]), int(colors[1]), int(colors[2])) 
+        cv2.line(image_with_lines, (x1, y1), (x2, y2), color, 2)
+
+    # RESCALE LINE IMAGE TO ORIGINAL DIMENSION
+    result_image = cv2.resize(image_with_lines, image.shape[:2][::-1], interpolation=cv2.INTER_LINEAR)
+    
+    # PERCENTUAL LINE EXTENSION
+    extended_lines = extend_lines(lines, extend_percent)
+    
+    # RESCALE LINES TO ORIGINAL DIMENSION
+    image_height, image_width, _ = resized_image.shape
+    scale_x, scale_y = calculate_scale_factors_large(effectiveArea.shape, target_dim)
+    rescaled_lines   = rescale_lines(lines, scale_x, scale_y)
+    
+    thinimage = cv2.resize(gray, (effectiveArea.shape[1], effectiveArea.shape[0]))
+    # cv2.imwrite("test0.png", thinimage)
+    
+    return rescaled_lines, result_image, scale_x, scale_y, thinimage
+
+def writeImage(image_path, image, verbose):
+    if image.ndim == 3:
+        if image.shape[2] == 2:
+            image = np.dstack((image[:, :, 0], image[:, :, 1], np.zeros(image[:, :, 0].shape)))
+    if verbose:
+        cv2.imwrite(image_path, image)
+        
+def findKey(input_string):
+    match = re.match(r'\d+', input_string)
+    if match:
+        return match.group()
+    else:
+        return None
+        
+def contours_to_shapely_polygons(contours, simplify_tolerance=10):
+    contours = contours[:, 0, :]
+    points = [Point(point[0], point[1]) for point in contours]
+    return Polygon(points).simplify(tolerance=simplify_tolerance)
+
+def FindGrid(image_path, verbose=True):
+    
+    filename = os.path.basename(image_path)
+    key = findKey(filename)
+    if key is None:
+        print(f"Could not find key in {filename}")
+        return None
+    
+    # Run images through CNNs
+    # Load the image
+    image = cv2.imread(image_path)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    classifications, classModel = findKeypoints(image)
+    effectiveArea, effectiveAreaModel = findSquares(image)
+    writeImage(f"tempfiles/{filename}_00_classification.png", classifications * 255, verbose)
+    writeImage(f"tempfiles/{filename}_00_effectiveArea.png", effectiveArea * 255, verbose)
+
+    # Get largest section of mask image
+    image_or = cv2.imread(image_path)
+    image = cv2.cvtColor(image_or, cv2.COLOR_BGR2GRAY)
+    image = cv2.resize(image, (512, 512)) 
+
+    a, b, c = identifyBiggestContour(effectiveArea[:, :, 1])
+    image_mask = cv2.drawContours(a[:, :, 0] * 0, contours=[c],contourIdx=-1, 
+                                  color=(255), thickness=cv2.FILLED)
+    
+
+    # Detect lines
+    lines, result_image, scale_x, scale_y, thinimage = line_detection(classifications, effectiveArea, image)
+    writeImage(f"tempfiles/{filename}_01_linedetection.png", result_image, verbose)
+    writeImage(f"tempfiles/{filename}_01_thinimage.png", thinimage, verbose)
+
+    # FILTER BY MOST POPULAR ANGLES
+    angles = calcAngles(lines)
+    line_angles, line_indices, sorted_idx = filterLines_MostPopularAngles(np.array(angles), 0.5)
+    
+    # GET RESCALED LINES
+    rescaled_lines_ordered = np.array(lines)[sorted_idx]
+    filtered_lines = rescaled_lines_ordered[np.concatenate(line_indices).flatten()]
+    
+    if verbose:
+        plotLines(image_or, filtered_lines, savedir=f"tempfiles/{filename}_02_azimuthfiltering.png")
+
+    # Extend lines to edges and filter by distance between lines
+    extended_lines = extend_lines_to_edges(filtered_lines, image_or.shape)
+    if verbose:
+        plotLines(image_or, extended_lines, savedir=f"tempfiles/{filename}_03_lineextension.png")
+
+    # Filter lines by distance between endpoints and re-extend
+    min_distance = 50 * np.sqrt(scale_x ** 2 + scale_y ** 2)
+    filtered_lines, filtered_idx = filter_lines_by_distance(extended_lines, min_distance)
+    extended_lines = extend_lines_to_edges(filtered_lines, image_or.shape)
+    if verbose:
+        plotLines(image_or, extended_lines, savedir=f"tempfiles/{filename}_04_distancefiltering.png")
+
+    # Clip lines
+    lines_shp   = lines_to_linestrings(filtered_lines)
+    split_lines = linestrings_to_lines(unary_union(lines_shp))
+    if verbose:
+        plotLines(image_or, extended_lines, savedir=f"tempfiles/{filename}_05_lineclipping.png")
+
+    overlapping_lines, overlap_values = get_overlapping_lines(split_lines, 
+                                                             thinimage, 
+                                                             0.8,)
+    
+    if verbose:
+        plotLines(image_or, overlapping_lines, savedir=f"tempfiles/{filename}_06_overlappinglines.png")
+    
+    # Convert lines to an image in which we identify contours
+    bw_bounds = draw_lines_to_image(overlapping_lines, (image_or.shape[1], image_or.shape[0]))
+    contours, hierarchy = cv2.findContours(bw_bounds, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+    writeImage(f"tempfiles/{filename}_06_drawnimage.png", bw_bounds, verbose)
+    highest_level = np.max(hierarchy, axis=1).flatten()[3]
+    print(hierarchy.shape)
+    print(hierarchy)
+    print(f"Highest Hierarchy: {highest_level}")
+    
+    # Test which squares are identified
+    if verbose:
+        filled_image = np.zeros(image_or.shape)
+        
+        # Fill innermost contours with random colors
+        for idx, contour in enumerate(contours):
+            
+            if hierarchy[0][idx][3] == highest_level:  # If contour has no child contours
+                color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+                cv2.drawContours(filled_image, [contour], -1, color, thickness=cv2.FILLED)
+        writeImage(f"tempfiles/{filename}_06_recognizedsquares.png", filled_image, verbose)
+
+
+    # Find which squares have a given text
+    outdict = {}
+
+    
+
+    for idx, contour in tqdm(enumerate(contours), total=len(contours)):
+        if hierarchy[0][idx][3] == highest_level:  # If contour has no child contours
+            x, y, w, h = cv2.boundingRect(contour)
+        
+            # Crop the contour region from the image
+            cropped_region = image_or[y:y+h, x:x+w, 0]
+            cropped_region = pad_image_with_percentage(cropped_region, 20, 20)
+            
+            writeImage(f"tempfiles/{filename}_07_{idx}.png", cropped_region, verbose)
+            
+            # Perform OCR using pytesseract
+            ocr_text = pytesseract.image_to_string(cropped_region,
+                                                  config='--psm 12 --oem 3 -c tessedit_char_whitelist=0123456789')
+            
+            if len(ocr_text) == 0:
+                continue
+            
+            text = find_word_with_key(ocr_text, key)
+            
+            if text is None:
+                continue
+            
+            if isinstance(text, list):
+                print("Found too many names! Splitting along longest sides")
+                try:
+                    shapely_contour = contours_to_shapely_polygons(contour)
+                    outpoly_1, outpoly_2 = splitPolygonByLongerSides(shapely_contour)
+                    
+                    outdict[text[0]] = outpoly_1
+                    outdict[text[1]] = outpoly_2
+                except:
+                    print("Failure! Results will be inaccurate due to line segment on Tile Boundary not being identified")
+                    continue
+                continue
+            outdict[text] = contour
+    
+    plt.clf()
+    
+    return outdict
+    
+def get_polygon_side_lengths(polygon):
+    # Get the coordinates of the polygon's vertices
+    vertices = polygon.exterior.coords
+    
+    # Calculate the lengths of the sides
+    side_lengths = []
+    for i in range(len(vertices)-1):
+        start_point = Point(vertices[i])
+        end_point = Point(vertices[i+1])
+        side_lengths.append(start_point.distance(end_point))
+    
+    # Add the length of the closing side (from last to first vertex)
+    start_point = Point(vertices[-1])
+    end_point = Point(vertices[0])
+    side_lengths.append(start_point.distance(end_point))
+    
+    return side_lengths
+
+def get_polygon_longest_side_midpoints(polygon, N):
+    # Get the coordinates of the polygon's vertices
+    vertices = polygon.exterior.coords
+    
+    # Calculate the lengths of the sides and their corresponding indices
+    side_lengths = [(i, Point(vertices[i]).distance(Point(vertices[i+1])))
+                    for i in range(len(vertices)-1)]
+    
+    # Add the length of the closing side (from last to first vertex)
+    side_lengths.append((len(vertices)-1,
+                         Point(vertices[-1]).distance(Point(vertices[0]))))
+    
+    # Sort the sides by length in descending order
+    sorted_sides = sorted(side_lengths, key=lambda x: x[1], reverse=True)
+    
+    # Get the indices of the N longest sides
+    longest_side_indices = [index for index, _ in sorted_sides[:N]]
+    
+    # Calculate the midpoints of the longest sides
+    midpoints = []
+    for index in longest_side_indices:
+        x = (vertices[index][0] + vertices[index+1][0]) / 2
+        y = (vertices[index][1] + vertices[index+1][1]) / 2
+        midpoints.append((x, y))
+    
+    midpoints = extend_lines([[midpoints[0][0], midpoints[0][1], midpoints[1][0], midpoints[1][1]]], 500)
+    midpoints = midpoints[0]
+    return LineString([(midpoints[0], midpoints[1]), (midpoints[2], midpoints[3])])
+
+def splitPolygonByLongerSides(original_polygon):
+    
+    # GET BOUNDING BOX
+    poly = original_polygon.minimum_rotated_rectangle
+    
+    # GET LINE TO SPLIT WITH
+    line = get_polygon_longest_side_midpoints(original_polygon, 2)
+    
+    
+    # SPLIT
+    outstruct = split(poly, line)
+    print(outstruct)
+    
+    return outstruct[0], outstruct[1]
