@@ -647,9 +647,7 @@ def FindGrid(image_path, verbose=True):
     contours, hierarchy = cv2.findContours(bw_bounds, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
     writeImage(f"tempfiles/{filename}_06_drawnimage.png", bw_bounds, verbose)
     highest_level = np.max(hierarchy, axis=1).flatten()[3]
-    print(hierarchy.shape)
-    print(hierarchy)
-    print(f"Highest Hierarchy: {highest_level}")
+    print(f"Highest Hierarchy: {highest_level} in {hierarchy.shape[1]} contours")
     
     # Test which squares are identified
     if verbose:
@@ -681,7 +679,8 @@ def FindGrid(image_path, verbose=True):
             
             # Perform OCR using pytesseract
             ocr_text = pytesseract.image_to_string(cropped_region,
-                                                  config='--psm 12 --oem 3 -c tessedit_char_whitelist=0123456789')
+                                                  config='--psm 12 --oem 3')
+                                                  # -c tessedit_char_whitelist=0123456789
             
             if len(ocr_text) == 0:
                 continue
