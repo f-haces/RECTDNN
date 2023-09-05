@@ -1,6 +1,5 @@
 # NOTEBOOK IMPORTS
-import os
-import glob
+import os, glob
 import numpy as np
 from tqdm.notebook import tqdm
 
@@ -9,11 +8,9 @@ import cv2
 from PIL import Image
 
 # GIS IMPORTS
-import fiona
-import pyproj
+import fiona, pyproj
 from affine import Affine
-from shapely.geometry import shape, mapping
-from shapely.geometry import Point, LineString
+from shapely.geometry import shape, mapping, Point, LineString
 from shapely.ops import transform, nearest_points, snap
 import geopandas as gpd
 import rasterio as rio
