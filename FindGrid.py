@@ -29,14 +29,15 @@ from fuzzywuzzy import fuzz
 import re
 
 # INITIALIZE
-t_path = r'C:\Users\fhacesga\AppData\Local\Programs\Tesseract-OCR\tesseract.exe'
+# t_path = r'C:\Users\fhacesga\AppData\Local\Programs\Tesseract-OCR\tesseract.exe'
+t_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 pytesseract.pytesseract.tesseract_cmd = t_path
 
 # MY OWN CLASSES
 from TileLocator import *
 from SquareLocator import *
 
-data_dir = r"C:\Users\fhacesga\OneDrive - University Of Houston\AAA_RECTDNN\data/"
+data_dir = r"C:\Users\franc\OneDrive - University Of Houston\AAA_RECTDNN\data/"
 
 # Process the image and get the result
 def upscale_to_max(image, target_dim, threshold=50):

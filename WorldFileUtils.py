@@ -100,6 +100,33 @@ def write_world_file_from_affine(affine, filename):
         file.write(f'{affine.e}\n')
         file.write(f'{affine.c}\n')
         file.write(f'{affine.f}\n')
+        
+
+def get_world_file_path(image_path):
+    # Get the file extension (e.g., "png", "jpg", "tif")
+    file_extension = image_path.split('.')[-1].lower()
+
+    # Define a dictionary to map file extensions to world file extensions
+    extension_mapping = {
+        'png': 'pgw',
+        'jpg': 'jpw',
+        'jpeg': 'jpw',  # You can add more extensions if needed
+        'tif': 'tfw',
+        'tiff': 'tfw',
+    }
+
+    # Check if the file extension is in the mapping
+    if file_extension in extension_mapping:
+        # Replace the file extension with the corresponding world file extension
+        world_file_extension = extension_mapping[file_extension]
+
+        # Create the world file path by replacing the image file extension with the world file extension
+        world_file_path = os.path.splitext(image_path)[0] + '.' + world_file_extension
+
+        return world_file_path
+    else:
+        return None  # Unsupported file extension
+
 
 def get_affine_from_geotransform(geotransform):
     return Affine.from_gdal(*geotransform)
