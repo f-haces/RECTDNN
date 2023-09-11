@@ -28,16 +28,24 @@ import pytesseract
 from fuzzywuzzy import fuzz
 import re
 
-# INITIALIZE
-# t_path = r'C:\Users\fhacesga\AppData\Local\Programs\Tesseract-OCR\tesseract.exe'
-t_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-pytesseract.pytesseract.tesseract_cmd = t_path
 
 # MY OWN CLASSES
 from TileLocator import *
 from SquareLocator import *
 
-data_dir = r"C:\Users\franc\OneDrive - University Of Houston\AAA_RECTDNN\data/"
+def initialize():
+    if os.getlogin() == 'fhacesga':
+        t_path   = r'C:\Users\fhacesga\AppData\Local\Programs\Tesseract-OCR\tesseract.exe'
+        data_dir = r"C:\Users\fhacesga\OneDrive - University Of Houston\AAA_RECTDNN\data/"
+    else:
+        t_path   = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+        data_dir = r"C:\Users\franc\OneDrive - University Of Houston\AAA_RECTDNN\data/"
+    
+    pytesseract.pytesseract.tesseract_cmd = t_path
+    
+    return data_dir
+    
+data_dir = initialize() 
 
 # Process the image and get the result
 def upscale_to_max(image, target_dim, threshold=50):
@@ -347,7 +355,7 @@ def draw_lines_to_image(lines, image_size, line_color=(255), background_color=(0
     return np.asarray(image)
     
     
-def get_overlapping_lines(lines_or, image_or, threshold, processing_size=2400):
+def get_overlapping_lines(lines_or, image_or, threshold, processing_size=2400, verbose=True):
     
     scale = processing_size / np.max(list(image_or.shape))
     scale_x, scale_y = scale, scale
@@ -371,7 +379,7 @@ def get_overlapping_lines(lines_or, image_or, threshold, processing_size=2400):
     overlapping_lines = []
     overlapping_values = []
     
-    for i, line in tqdm(enumerate(lines), total=len(lines)):
+    for i, line in tqdm(enumerate(lines), total=len(lines), disable=~verbose):
                 
         x1, y1, x2, y2 = [int(x) for x in line]
         line_image = overlap_image_fr.copy()
@@ -398,14 +406,7 @@ def get_overlapping_lines(lines_or, image_or, threshold, processing_size=2400):
         
     return overlapping_lines, overlapping_values
 
-def find_word_with_key(text, key):
-    pattern = r'\b\w*' + re.escape(key) + r'\w*\b'  # Regular expression pattern
-    match = re.search(pattern, text, flags=re.IGNORECASE)
-    if match:
-        return match.group()
-    else:
-        return None
-        
+
 def simplifyShapelyPolygon(polygon, tolerance = .1):
     """ Simplify a polygon with shapely.
     Polygon: ndarray
@@ -459,6 +460,8 @@ def find_word_with_key(text, key, threshold=80, verbose=True):
         similarities.append(similarity)
         
     similarities = np.array(similarities)
+    if similarities.size == 0:
+        return None
 
     # Find the maximum value in the array
     max_value = np.max(similarities)
@@ -578,6 +581,7 @@ def FindGrid(image_path, verbose=True):
     
     filename = os.path.basename(image_path)
     key = findKey(filename)
+    print(f"Using {key} to find as many tiles as possible")
     if key is None:
         print(f"Could not find key in {filename}")
         return None
@@ -638,7 +642,8 @@ def FindGrid(image_path, verbose=True):
 
     overlapping_lines, overlap_values = get_overlapping_lines(split_lines, 
                                                              thinimage, 
-                                                             0.8,)
+                                                             0.8,
+                                                             verbose=verbose)
     
     if verbose:
         plotLines(image_or, overlapping_lines, savedir=f"tempfiles/{filename}_06_overlappinglines.png")
@@ -668,7 +673,7 @@ def FindGrid(image_path, verbose=True):
 
     
 
-    for idx, contour in tqdm(enumerate(contours), total=len(contours)):
+    for idx, contour in tqdm(enumerate(contours), total=len(contours), disable=~verbose):
         if hierarchy[0][idx][3] == highest_level:  # If contour has no child contours
             x, y, w, h = cv2.boundingRect(contour)
         
@@ -685,8 +690,8 @@ def FindGrid(image_path, verbose=True):
             
             if len(ocr_text) == 0:
                 continue
-            
-            text = find_word_with_key(ocr_text, key)
+                
+            text = find_word_with_key(ocr_text, key, verbose=verbose)
             
             if text is None:
                 continue
@@ -697,8 +702,8 @@ def FindGrid(image_path, verbose=True):
                     shapely_contour = contours_to_shapely_polygons(contour)
                     outpoly_1, outpoly_2 = splitPolygonByLongerSides(shapely_contour)
                     
-                    outdict[text[0]] = outpoly_1
-                    outdict[text[1]] = outpoly_2
+                    outdict[text[0]] = convertShapelyToCV2(outpoly_1)
+                    outdict[text[1]] = convertShapelyToCV2(outpoly_2)
                 except:
                     print("Failure! Results will be inaccurate due to line segment on Tile Boundary not being identified")
                     continue

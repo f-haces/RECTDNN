@@ -160,3 +160,14 @@ def find_points_on_linestring(linestring, points):
         points_on_linestring.append(test[0])
 
     return points_on_linestring
+    
+def convertShapelyToCV2(shapely_polygon):
+    # Convert the Shapely polygon to a list of points
+    points = list(shapely_polygon.exterior.coords)
+
+    # Convert the points to a NumPy array of integer coordinates (required by cv2)
+    contour = np.array(points, dtype=np.int32)
+
+    # Reshape the contour to match the required format for cv2.findContours
+    contour = contour.reshape((-1, 1, 2))
+    return contour
