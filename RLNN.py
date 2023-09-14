@@ -1,6 +1,5 @@
 # PYTHON IMPORTS
-import os
-import copy
+import os, copy
 from tqdm.notebook import trange, tqdm
 
 # IMAGE IMPORTS 
@@ -8,8 +7,7 @@ from PIL import Image
 import cv2
 
 # DATA IMPORTS 
-import random
-import h5py
+import random, h5py
 import numpy as np
 
 # PLOTTING
@@ -27,21 +25,53 @@ from torchvision.transforms import Compose, RandomCrop, ToTensor, Normalize
 import torch.optim.lr_scheduler as lr_scheduler
 import torchvision.models as models
 
-class SquareLocator(nn.Module):
-    def __init__(self, num_classes=2, finalpadding=0):
-        super(SquareLocator, self).__init__()
+class SpatialAttention(nn.Module):
+    def __init__(self):
+        super(SpatialAttention, self).__init__()
+        self.conv = nn.Conv2d(2, 1, kernel_size=3, padding=1)
+        
+    def forward(self, x):
+        # Calculate channel-wise average pooling
+        avg_pool = torch.mean(x, dim=1, keepdim=True)
+
+        # Calculate channel-wise max pooling
+        max_pool, _ = torch.max(x, dim=1, keepdim=True)
+
+        # Concatenate both pooling results along the channel dimension
+        pool = torch.cat([avg_pool, max_pool], dim=1)
+
+        # Apply convolutional layer and sigmoid activation
+        attention = torch.sigmoid(self.conv(pool))
+
+        # Multiply the input feature map by the attention map
+        attended_feature_map = x * attention
+
+        return attended_feature_map
+
+
+class RLNN(nn.Module):
+
+    def __init__(self, num_classes=2, finalpadding=0, inputsize=1, verbose_level=1):
+        super(RLNN, self).__init__()
         
         self.softmax = nn.Softmax()
+        
+        self.attention = SpatialAttention().to("cuda:0")
+        
+        self.verbose_level = int(verbose_level)
         
         # ResNet backbone
         self.resnet = models.resnet34(pretrained=True)
         
         # Adjust the first convolutional layer to accept single-channel input
-        self.resnet.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.resnet.conv1 = nn.Conv2d(inputsize, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        # self.resnet.conv1 = nn.Conv2d(inputsize, 3, kernel_size=1, stride=1, padding=0, bias=False)
+        # self.resnet.conv2 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
         
         # Encoder
         self.encoder1 = nn.Sequential(
             self.resnet.conv1,
+            # self.resnet.conv2,
             self.resnet.bn1,
             self.resnet.relu,
             self.resnet.maxpool
@@ -59,7 +89,11 @@ class SquareLocator(nn.Module):
         
         # Final convolutional layer
         self.final_conv = nn.Conv2d(64, num_classes, kernel_size=1, padding=finalpadding)
-        
+      
+    def notify(self, mess, level=4):
+        if self.verbose_level >= level:
+            print(mess)
+      
     def _make_decoder_block(self, in_channels, mid_channels, out_channels, s=2):
         return nn.Sequential(
             nn.ConvTranspose2d(in_channels, mid_channels, kernel_size=2, stride=s),
@@ -71,19 +105,28 @@ class SquareLocator(nn.Module):
     def forward(self, x, resize=True):
                 
         # Encoder
+        x    = self.attention(x)
         enc1 = self.encoder1(x)
+        self.notify((enc1.shape))
         enc2 = self.encoder2(enc1)
+        self.notify((enc2.shape))
         enc3 = self.encoder3(enc2)
+        self.notify((enc3.shape))
         enc4 = self.encoder4(enc3)
+        self.notify((enc4.shape))
         enc5 = self.encoder5(enc4)
+        self.notify((enc5.shape))
         
         
         # Decoder with residual connections
         dec4 = self.decoder4(enc5)
+        self.notify((dec4.shape, enc4.shape))
         dec3 = self.decoder3(torch.cat([dec4, enc4], dim=1))
+        self.notify((dec3.shape, enc3.shape))
         dec2 = self.decoder2(torch.cat([dec3, enc3], dim=1))
+        self.notify((dec2.shape, enc2.shape))
         dec1 = self.decoder1(torch.cat([dec2, enc2], dim=1))
-        
+        self.notify((dec1.shape, enc1.shape))
         # Final convolutional layer
         output = self.final_conv(dec1)
         
@@ -230,7 +273,7 @@ def dynamic_resize(images, target_size):
 
     return output
 
-class SquareDataset_Multiclass(Dataset):
+class RLNN_Multiclass(Dataset):
     def __init__(self, input_folder, target_folder, transform=None, crop=True, resize=False, resize_def=2048):
         self.input_folder = input_folder
         self.target_folder = target_folder         
@@ -252,14 +295,11 @@ class SquareDataset_Multiclass(Dataset):
             # self.images, self.masks, self.original_shapes  = dynamic_pad_resize(self.images_unscaled, (resize_def, resize_def))
             # self.targets, _ , _ = dynamic_pad_resize(self.targets_unscaled, (resize_def, resize_def))
             
-            self.images = dynamic_resize(self.images_unscaled, (resize_def, resize_def))
+            self.images  = dynamic_resize(self.images_unscaled , (resize_def, resize_def))
             self.targets = dynamic_resize(self.targets_unscaled, (resize_def, resize_def))
         else:
             self.images  = self.images_unscaled
             self.targets = self.targets_unscaled
-            
-        # delattr(self, "images_unscaled")
-        # delattr(self, "targets_unscaled")
         
         
     def __len__(self):
@@ -268,7 +308,7 @@ class SquareDataset_Multiclass(Dataset):
     def __getitem__(self, index):
         # input_path = os.path.join(self.input_folder, self.image_filenames[index])
         
-        input_image = self.images[index]        
+        input_image  = self.images[index]        
         target_image = self.targets[index]
         
         # Apply the same random transformation to both image
