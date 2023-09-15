@@ -43,6 +43,27 @@ def calculate_iou(outputs, targets):
 
     return iou
 
+def class_to_one_hot(image, num_classes):
+    """
+    Convert class labels to one-hot encoded vectors.
+
+    Args:
+        class_labels (list or numpy.ndarray): List of class labels.
+        num_classes (int): Total number of classes.
+
+    Returns:
+        numpy.ndarray: One-hot encoded array where each row corresponds to a class label.
+    """
+    
+    one_hot_matrix  = []
+    for i in range(num_classes):
+        one_hot_matrix.append(np.where(image == i, 1, 0))
+        
+    one_hot_matrix  = np.dstack(one_hot_matrix)
+    
+
+    return one_hot_matrix
+
 # Function to update the plots
 def update_plots(losses, accuracies, fig, axs, 
                  update_interval_x=10,

@@ -68,15 +68,26 @@ def extract_numerical_chars(text):
             break
     return numerical_chars
     
+    
 class NN_Multiclass(Dataset):
-    def __init__(self, input_folder, target_folder, transform=None, crop=True, resize=False, resize_def=2048, cropsize=1024):
+    def __init__(self, input_folder, target_folder, 
+                 transform=None, 
+                 crop=True, 
+                 n_pyramids=0,
+                 resize=False, 
+                 only_true=False, 
+                 resize_def=2048, 
+                 cropsize=512):
+        
         self.input_folder = input_folder
         self.target_folder = target_folder         
         self.transform = transform
         self.crop = crop
         self.cropsize = cropsize
-        self.image_filenames = os.listdir(input_folder)      
+        self.image_filenames = os.listdir(input_folder)
+        self.n_pyramids = n_pyramids
         self.images_unscaled = list()        
+        self.onlytrueoutputs = only_true
         
         for fn in self.image_filenames:
             image = Image.open(os.path.join(self.input_folder, fn)).convert('L')
@@ -118,14 +129,24 @@ class NN_Multiclass(Dataset):
             
         if self.crop:
             sample = {'image': input_image, 'target': target_image}
-            croptrans = transforms.Compose([RandomCrop((self.cropsize, self.cropsize))])
-            sample_transformed = croptrans(sample)
-            input_image, target_image = sample_transformed['image'], sample_transformed['target']
+            if self.n_pyramids > 0:
+                croptrans = transforms.Compose([RandomPyramidCrop((self.cropsize, self.cropsize), self.n_pyramids)])
+                sample_transformed = croptrans(sample)
+                input_image, target_image = sample_transformed['image'], sample_transformed['target']
+            else:
+                croptrans = transforms.Compose([RandomCrop((self.cropsize, self.cropsize))])
+                sample_transformed = croptrans(sample)
+                input_image, target_image = sample_transformed['image'], sample_transformed['target']
         
         target_image = target_image.to(torch.long).squeeze()
         
-        return input_image.float(), target_image, self.image_filenames[index]
+        if self.onlytrueoutputs:
+            mask = (input_image[0, :, :] < 0.5).squeeze()
+            target_image = np.where(mask, target_image, 0)
+            # for channel in range(target_image.shape[0]):
+            #    target_image[channel, :, :] = np.where(mask, target_image[channel, :, :], 0)
         
+        return input_image.float(), target_image, self.image_filenames[index]       
 class RandomCrop(object):
     def __init__(self, size):
         self.size = size
@@ -153,7 +174,76 @@ class RandomCrop(object):
             target = target_i[:, i:i+new_h, j:j+new_w]
 
         return {'image': img, 'target': target}
+        
+        
+class RandomPyramidCrop(object):
+    def __init__(self, size, pyramid_depth):
+        self.size = size
+        self.pyramid_depth = pyramid_depth
+        
+    def get_rectangular_region(self, image, x, y, d):
+        
+        r = d // 2
+        
+        if image.ndim == 2:
+            image = np.expand_dims(image, 0)
+            
+        width, height = image.shape[-2:]
 
+        # Calculate the coordinates of the top-left and bottom-right corners of the region
+        x1 = max(0, x - r)
+        y1 = max(0, y - r)
+        x2 = min(width - 1, x + r)
+        y2 = min(height - 1, y + r)
+        
+        image_region = image[:, x1:x2, y1:y2]
+
+        # Calculate the width and height of the rectangular region
+        # region_width = x2 - x1 + 1
+        # region_height = y2 - y1 + 1
+
+        # Create an empty array filled with zeros for the result
+        result = np.zeros((image.shape[0], r * 2, r * 2))
+        
+        # Calculate the coordinates in the input image for copying data
+        x1_in_image = max(0, r - x)
+        y1_in_image = max(0, r - y)
+        x2_in_image = x1_in_image + image_region.shape[1]# min(image_region.shape[1], width - x + r)
+        y2_in_image = y1_in_image + image_region.shape[2]# min(image_region.shape[2], height - (y + r))
+
+        # Copy the data from the input image to the result
+        result[:, x1_in_image:x2_in_image, y1_in_image:y2_in_image,] = image_region
+        
+        return result
+
+    def __call__(self, sample):
+        img_i, target_i = sample['image'], sample['target']
+        h, w = img_i.shape[1], img_i.shape[2]
+        
+        new_h, new_w = self.size
+
+        i = random.randint(0, h)
+        j = random.randint(0, w)
+        
+        target = torch.from_numpy(self.get_rectangular_region(target_i, i, j, new_h))
+        # print(target.shape)
+        
+        
+        pyramid = []
+        for i in range(self.pyramid_depth):
+            image_curr = self.get_rectangular_region(img_i[0, :, :], i, j, new_h * (i+1))
+            image_curr = np.moveaxis(image_curr, [0, 1, 2], [2, 0, 1])            
+            image_curr_r = cv2.resize(image_curr, (new_h, new_h), interpolation=cv2.INTER_LINEAR)
+            # notify(f"From {image_curr.shape} to {image_curr_r.shape}")
+            pyramid.append(image_curr_r)
+            
+        img = np.moveaxis(np.dstack(pyramid), [2, 0, 1], [0, 1, 2])  
+        img = torch.from_numpy(img)
+        # print(img.shape)
+        
+        
+        return {'image': img, 'target': target}
+        
 def loadClasses(folder_path, fns=None):
     class_folders = os.listdir(folder_path)
     labels = []
