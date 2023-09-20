@@ -146,7 +146,10 @@ class NN_Multiclass(Dataset):
             # for channel in range(target_image.shape[0]):
             #    target_image[channel, :, :] = np.where(mask, target_image[channel, :, :], 0)
         
-        return input_image.float(), target_image, self.image_filenames[index]       
+        return input_image.float(), target_image, self.image_filenames[index]    
+
+
+      
 class RandomCrop(object):
     def __init__(self, size):
         self.size = size
@@ -189,7 +192,7 @@ class RandomPyramidCrop(object):
             image = np.expand_dims(image, 0)
             
         width, height = image.shape[-2:]
-
+        
         # Calculate the coordinates of the top-left and bottom-right corners of the region
         x1 = max(0, x - r)
         y1 = max(0, y - r)
@@ -210,7 +213,8 @@ class RandomPyramidCrop(object):
         y1_in_image = max(0, r - y)
         x2_in_image = x1_in_image + image_region.shape[1]# min(image_region.shape[1], width - x + r)
         y2_in_image = y1_in_image + image_region.shape[2]# min(image_region.shape[2], height - (y + r))
-
+        
+        
         # Copy the data from the input image to the result
         result[:, x1_in_image:x2_in_image, y1_in_image:y2_in_image,] = image_region
         
@@ -225,25 +229,28 @@ class RandomPyramidCrop(object):
         i = random.randint(0, h)
         j = random.randint(0, w)
         
-        target = torch.from_numpy(self.get_rectangular_region(target_i, i, j, new_h))
-        # print(target.shape)
+        target = torch.from_numpy(self.get_rectangular_region(target_i, j, i, new_h))
+        while torch.sum(target) == 0:
+            i = random.randint(0, h)
+            j = random.randint(0, w)
+            target = torch.from_numpy(self.get_rectangular_region(target_i, j, i, new_h))
         
         
         pyramid = []
-        for i in range(self.pyramid_depth):
-            image_curr = self.get_rectangular_region(img_i[0, :, :], i, j, new_h * (i+1))
-            image_curr = np.moveaxis(image_curr, [0, 1, 2], [2, 0, 1])            
+        for x in range(self.pyramid_depth):
+            image_curr = self.get_rectangular_region(img_i[0, :, :], j, i, new_h * (x+1))
+            image_curr = np.moveaxis(image_curr, [0], [2])            
             image_curr_r = cv2.resize(image_curr, (new_h, new_h), interpolation=cv2.INTER_LINEAR)
-            # notify(f"From {image_curr.shape} to {image_curr_r.shape}")
+            # print(f"From {image_curr.shape} to {image_curr_r.shape}")
             pyramid.append(image_curr_r)
             
-        img = np.moveaxis(np.dstack(pyramid), [2, 0, 1], [0, 1, 2])  
+        img = np.moveaxis(np.dstack(pyramid), [2], [0])  
         img = torch.from_numpy(img)
         # print(img.shape)
         
         
         return {'image': img, 'target': target}
-        
+
 def loadClasses(folder_path, fns=None):
     class_folders = os.listdir(folder_path)
     labels = []

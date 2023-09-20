@@ -70,7 +70,8 @@ def update_plots(losses, accuracies, fig, axs,
                  labels=["Training", "Validation"],
                  titles=["Loss", "Intersection over Union"],
                  colors=["b","g","r"]*2,
-                 linestyles=["solid", "dotted"]):
+                 linestyles=["solid", "dotted"], 
+                 annotations=None):
     
     # IF ONLY ONE LINE PER PLOT, ADD TO UNDERLYING LIST
     if not isinstance(losses[0], list):
@@ -101,6 +102,8 @@ def update_plots(losses, accuracies, fig, axs,
         ax.set_ylabel(titles[i])
         ax.set_xlabel("Epochs")
         
+    if annotations is not None:
+        axs[0].set_title(annotations)
     # UPDATE FIGURE
     fig.canvas.flush_events() 
     fig.canvas.draw()
