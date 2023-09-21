@@ -30,8 +30,9 @@ import re
 
 
 # MY OWN CLASSES
-from TileLocator import *
-from SquareLocator import *
+from TPNN import *
+from RLNN import *
+from DataUtils import *
 
 def initialize():
     if os.getlogin() == 'fhacesga':
@@ -90,11 +91,19 @@ def identifyBiggestContour(image, initial_image=None):
     
     return rectangles_image, contours[idx], approx
 
-def findSquares(image, model=None, model_checkpoint=f"{data_dir}SquareLocator/checkpoint_072923.pth"):
+def findSquares(image, model=None, 
+        model_checkpoint=f"{data_dir}RLNN/checkpoint_091323.pth",
+        cnn_creation_params=None):
+        
+    if cnn_creation_params is None:
+        cnn_creation_params = {
+            "finalpadding" : 1,
+            "num_classes"    : 3
+        }
     
     # Initialize model
     if model is None:
-        model = SquareLocator(finalpadding=1)
+        model = RLNN(**cnn_creation_params)
         model.load_state_dict(torch.load(model_checkpoint)['model_state_dict'])
     model = model.to("cuda")
 
@@ -120,7 +129,24 @@ def findSquares(image, model=None, model_checkpoint=f"{data_dir}SquareLocator/ch
     
     return outputs, model
 
-def findKeypoints(image, model=None, model_checkpoint=f"{data_dir}TileLocator/checkpoint_080323.pth"):
+def findKeypoints(image, model=None, num_classes=5, num_pyramids=3,
+                cnn_run_params=None, cnn_creation_params=None,
+                model_checkpoint=f"{data_dir}TPNN/checkpoint_091523_pyramids_2.pth"):
+    
+    if cnn_run_params is None:
+        cnn_run_params = {
+            "tilesize"   : 2048,
+            "edges"      : 0,
+            "dims_rep"   : None,
+            "n_pyramids" : num_pyramids,
+            "num_dim"    : num_classes
+        }
+    
+    if cnn_creation_params is None:
+        cnn_creation_params = {
+            "num_classes" : num_classes,
+            "inputsize"   : num_pyramids,
+        }
     
     # Input handling
     if isinstance(image, np.ndarray):
@@ -128,13 +154,13 @@ def findKeypoints(image, model=None, model_checkpoint=f"{data_dir}TileLocator/ch
     
     # Initialize model if needed
     if model is None:
-        model = RectangleClass(num_classes=3)
+        model = TPNN(**cnn_creation_params)
         model.load_state_dict(torch.load(model_checkpoint)['model_state_dict'])
     model = model.to("cuda")
     
     # PROCESS IMAGE
     for im in image:
-        outputs = split_and_run_cnn(Image.fromarray(im), model, tilesize=1024, edges=0, dims_rep=[0])
+        outputs = split_and_run_cnn(im, model, **cnn_run_params)
     
     # background, grid, roads = outputs[:, :, 0], outputs[:, :, 1], outputs[:, :, 2]
     
@@ -577,24 +603,7 @@ def contours_to_shapely_polygons(contours, simplify_tolerance=10):
     points = [Point(point[0], point[1]) for point in contours]
     return Polygon(points).simplify(tolerance=simplify_tolerance)
 
-def FindGrid(image_path, verbose=True):
-    
-    filename = os.path.basename(image_path)
-    key = findKey(filename)
-    print(f"Using {key} to find as many tiles as possible")
-    if key is None:
-        print(f"Could not find key in {filename}")
-        return None
-    
-    # Run images through CNNs
-    # Load the image
-    image = cv2.imread(image_path)
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-    classifications, classModel = findKeypoints(image)
-    effectiveArea, effectiveAreaModel = findSquares(image)
-    writeImage(f"tempfiles/{filename}_00_classification.png", classifications * 255, verbose)
-    writeImage(f"tempfiles/{filename}_00_effectiveArea.png", effectiveArea * 255, verbose)
+def FindGrid(classifications, effectiveArea, key, image_path, verbose=True):
 
     # Get largest section of mask image
     image_or = cv2.imread(image_path)

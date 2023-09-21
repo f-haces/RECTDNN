@@ -185,40 +185,7 @@ class RandomPyramidCrop(object):
         self.pyramid_depth = pyramid_depth
         
     def get_rectangular_region(self, image, x, y, d):
-        
-        r = d // 2
-        
-        if image.ndim == 2:
-            image = np.expand_dims(image, 0)
-            
-        width, height = image.shape[-2:]
-        
-        # Calculate the coordinates of the top-left and bottom-right corners of the region
-        x1 = max(0, x - r)
-        y1 = max(0, y - r)
-        x2 = min(width - 1, x + r)
-        y2 = min(height - 1, y + r)
-        
-        image_region = image[:, x1:x2, y1:y2]
-
-        # Calculate the width and height of the rectangular region
-        # region_width = x2 - x1 + 1
-        # region_height = y2 - y1 + 1
-
-        # Create an empty array filled with zeros for the result
-        result = np.zeros((image.shape[0], r * 2, r * 2))
-        
-        # Calculate the coordinates in the input image for copying data
-        x1_in_image = max(0, r - x)
-        y1_in_image = max(0, r - y)
-        x2_in_image = x1_in_image + image_region.shape[1]# min(image_region.shape[1], width - x + r)
-        y2_in_image = y1_in_image + image_region.shape[2]# min(image_region.shape[2], height - (y + r))
-        
-        
-        # Copy the data from the input image to the result
-        result[:, x1_in_image:x2_in_image, y1_in_image:y2_in_image,] = image_region
-        
-        return result
+        return get_rectangular_region(image, x, y, d)
 
     def __call__(self, sample):
         img_i, target_i = sample['image'], sample['target']
@@ -387,8 +354,6 @@ def loadClasses(folder_path):
 
     return outputs'''
 
-
-
 def bomb_edges(image, size=2, dims=[0,1,2]):
     image[:, 0:size, dims] = 255
     image[:, -size:, dims] = 255
@@ -402,8 +367,92 @@ def bomb_edges(image, size=2, dims=[0,1,2]):
     image[-size:, :, c] = 0
     
     return image
+    
+def get_rectangular_region(image, x, y, d):
+        
+    r = d // 2
+    
+    if image.ndim == 2:
+        image = np.expand_dims(image, 0)
+        
+    width, height = image.shape[-2:]
+    
+    # Calculate the coordinates of the top-left and bottom-right corners of the region
+    x1 = max(0, x - r)
+    y1 = max(0, y - r)
+    x2 = min(width - 1, x + r)
+    y2 = min(height - 1, y + r)
+    
+    image_region = image[:, x1:x2, y1:y2]
 
-def split_and_run_cnn(image, model, tilesize=2048, num_dim=3, edges=3, dims_rep=None):
+    # Calculate the width and height of the rectangular region
+    # region_width = x2 - x1 + 1
+    # region_height = y2 - y1 + 1
+
+    # Create an empty array filled with zeros for the result
+    result = np.zeros((image.shape[0], r * 2, r * 2))
+    
+    # Calculate the coordinates in the input image for copying data
+    x1_in_image = max(0, r - x)
+    y1_in_image = max(0, r - y)
+    x2_in_image = x1_in_image + image_region.shape[1]# min(image_region.shape[1], width - x + r)
+    y2_in_image = y1_in_image + image_region.shape[2]# min(image_region.shape[2], height - (y + r))
+    
+    
+    # Copy the data from the input image to the result
+    result[:, x1_in_image:x2_in_image, y1_in_image:y2_in_image,] = image_region
+    
+    return result
+    
+def get_rectangular_region_tl(image, x, y, d):
+    
+    # WHAT'S THE RADIUS?
+    r = d // 2
+    
+    width, height = image.shape[-2:]
+    # Calculate the coordinates of the top-left and bottom-right corners of the region
+    x1 = max(0, x - r)
+    y1 = max(0, y - r)
+    x2 = min(width - 1, x + r)
+    y2 = min(height - 1, y + r)
+
+    image_region = image[x1:x2, y1:y2]
+
+    # Create an empty array filled with zeros for the result
+    result = np.zeros((d, d))
+
+    # Calculate the coordinates in the input image for copying data
+    x1_in_image = max(0, r - x)
+    y1_in_image = max(0, r - y)
+    x2_in_image = x1_in_image + image_region.shape[0]
+    y2_in_image = y1_in_image + image_region.shape[1]
+    
+    # Copy the data from the input image to the result
+    result[x1_in_image:x2_in_image, y1_in_image:y2_in_image,] = image_region
+
+    return result
+        
+def get_pyramid(image, j, i, pyramid_depth, pyramid_size, plot=False):
+    
+    j = j + pyramid_size // 2
+    i = i + pyramid_size // 2
+    
+    if plot:
+        fig, axs = plt.subplots(1, pyramid_depth, figsize=(5 * pyramid_depth, 5))
+    
+    pyramid = []
+    for x in range(pyramid_depth):
+        image_curr = get_rectangular_region_tl(image, j, i, pyramid_size * (x+1))
+        image_curr_r = cv2.resize(image_curr, (pyramid_size, pyramid_size), interpolation=cv2.INTER_LINEAR)
+        pyramid.append(image_curr_r)
+        
+        if plot:
+            axs[x].imshow(image_curr_r)
+        
+    pyramid = np.dstack(pyramid)
+    return pyramid
+    
+def split_and_run_cnn(image, model, tilesize=2048, num_dim=3, edges=3, dims_rep=None, n_pyramids=3):
 
     if dims_rep is None:
         dims_rep=np.arange(num_dim)
@@ -418,9 +467,8 @@ def split_and_run_cnn(image, model, tilesize=2048, num_dim=3, edges=3, dims_rep=
     if np.asarray(image).ndim == 3:
         image = Image.fromarray(np.asarray(image)[:,:,0])
     
-    
     # Calculate the number of tiles needed
-    width, height = image.size
+    width, height = image.shape
     num_tiles_x = (width + tilesize-1) // tilesize
     num_tiles_y = (height + tilesize-1) // tilesize
     
@@ -439,15 +487,11 @@ def split_and_run_cnn(image, model, tilesize=2048, num_dim=3, edges=3, dims_rep=
             x1 = min(x0 + tilesize, width)
             y1 = min(y0 + tilesize, height)
             
-            # Crop the image to the current tile
-            tile = image.crop((x0, y0, x1, y1))
+            x_pad = x1 - x0
+            y_pad = y1 - y0
             
-            # Pad the tile if needed
-            pad_width = tilesize - tile.width
-            pad_height = tilesize - tile.height
-            if pad_width > 0 or pad_height > 0:
-                padding = ((0, pad_height), (0, pad_width))
-                tile = np.pad(tile, padding, mode='constant')
+            # GET PYRAMIDS TO PROCESS IMAGE
+            tile = get_pyramid(image, x0, y0, n_pyramids, tilesize)
             
             # Preprocess the tile
             tile = np.array(tile)
@@ -455,28 +499,21 @@ def split_and_run_cnn(image, model, tilesize=2048, num_dim=3, edges=3, dims_rep=
             if np.max(tile) == 1:
                 tile = tile * 255
             
-            # tile = np.where(tile > 127, 255, 0).astype(np.uint8)
-            
             tile = tile.astype(np.uint8)
-            
             
             tile_tensor = tensor(tile).unsqueeze(0).to("cuda")
             
             # Run the CNN on the tile
             output = model(tile_tensor)
             
-            output = output[0, :, :, :].cpu().detach().numpy().T
+            output = output[0, :, :, :].cpu().detach().numpy()
+            
+            output = np.moveaxis(output, [0], [2])
             
             # POSTPROCESS 
             if edges != 0:
                 output = bomb_edges(output, size=edges, dims=dims_rep)
             
-            # Store the output tile
-            x_fin = tilesize - pad_width
-            y_fin = tilesize - pad_height
-            
-            temp = output[0:x_fin, 0:y_fin, :]
-            
-            output_gen[x0:x1, y0:y1, :] = temp
+            output_gen[x0:x1, y0:y1, :] = output[:x_pad, :y_pad, :]
         torch.cuda.empty_cache()
     return output_gen
