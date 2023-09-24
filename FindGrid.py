@@ -167,6 +167,9 @@ def findKeypoints(image, model=None, num_classes=5, num_pyramids=3,
     model = model.to("cpu")
     torch.cuda.empty_cache()
     
+    outputs = outputs * 255
+    outputs = outputs.astype(np.uint8)
+    
     # return (background.T, grid.T, roads.T), model
     return outputs, model
 
@@ -523,7 +526,7 @@ def pad_image_with_percentage(image, width_padding_percent, height_padding_perce
     
     return padded_image
     
-def line_detection(classifications, effectiveArea, image,
+def line_detection(classifications, effectiveArea, image_or,
                    target_dim=(2400, 2400),   # PROCESSING RESOLUTION
                    threshold=10/255,          # INITIAL THRESHOLDING BARRIER
                    degree_resolution=25,      # HOUGH LINES TRANSFORM - HOW MANY SUBDIVISIONS TO A DEGREE
@@ -531,15 +534,15 @@ def line_detection(classifications, effectiveArea, image,
                    extend_percent=15,         # EXTEND PERCENT FOR LINES POST RECOGNITION
                    certainty=.90
                   ):
-    # RESIZE INPUTS TO TARGET RESOLUTION
+    # RESIZE INPUTS TO TARGET RESOLUTION011201
     effectiveArea_resized = cv2.resize(effectiveArea[:, :, 1], target_dim)
-    resized_image = cv2.resize(classifications, target_dim, interpolation=cv2.INTER_AREA)
+    resized_image = cv2.resize(classifications, target_dim, interpolation=cv2.INTER_LINEAR)
     
     # THRESHOLD IMAGES
     # gray = np.logical_or(resized_image[:, :, 1].T > threshold, resized_image[:, :, 2].T > threshold) * 255
     # gray = np.logical_or(resized_image[:, :, 1].T > threshold, 
     #     resized_image[:, :, 2].T * (1 - certainty)> threshold) * 255
-    gray = (resized_image[:, :, 2].T > threshold) * 255
+    gray = (resized_image[:, :, 4] > threshold) * 255
     gray = gray.astype(np.uint8)
     
     # CONSIDER ADDING SOME LOGIC BY WHICH, INSTEAD OF ONLY USING THE LINE CLASSIFICATIONS
@@ -547,6 +550,7 @@ def line_detection(classifications, effectiveArea, image,
     
     # LINE THINNING AND RETHRESHOLDING
     gray = cv2.ximgproc.thinning(gray, thinningType=cv2.ximgproc.THINNING_GUOHALL)
+    # cv2.imwrite('test.png', gray)
     # gray = np.where(effectiveArea_resized > 0, gray, 0)
     
     # HOUGH TRANSFORMS
@@ -554,7 +558,8 @@ def line_detection(classifications, effectiveArea, image,
                             threshold=100, 
                             minLineLength= line_length * 2, 
                             maxLineGap= line_length // 2)
-
+                            
+    # print(lines)
     # UNPACK LINES FROM ADDITIONAL DIMENSION THAT CV2 RETURNS THEM FROM
     lines = [line[0] for line in lines]
 
@@ -569,7 +574,7 @@ def line_detection(classifications, effectiveArea, image,
         cv2.line(image_with_lines, (x1, y1), (x2, y2), color, 2)
 
     # RESCALE LINE IMAGE TO ORIGINAL DIMENSION
-    result_image = cv2.resize(image_with_lines, image.shape[:2][::-1], interpolation=cv2.INTER_LINEAR)
+    result_image = cv2.resize(image_with_lines, image_or.shape[:2][::-1], interpolation=cv2.INTER_LINEAR)
     
     # PERCENTUAL LINE EXTENSION
     extended_lines = extend_lines(lines, extend_percent)
