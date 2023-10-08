@@ -452,7 +452,8 @@ def get_pyramid(image, j, i, pyramid_depth, pyramid_size, plot=False):
     pyramid = np.dstack(pyramid)
     return pyramid
     
-def split_and_run_cnn(image, model, tilesize=2048, num_dim=3, edges=3, dims_rep=None, n_pyramids=3):
+def split_and_run_cnn(image, model, tilesize=2048, 
+    num_dim=3, edges=3, dims_rep=None, n_pyramids=3, device="cuda"):
 
     if dims_rep is None:
         dims_rep=np.arange(num_dim)
@@ -465,7 +466,7 @@ def split_and_run_cnn(image, model, tilesize=2048, num_dim=3, edges=3, dims_rep=
     # image = Image.open(image_path)
     
     if np.asarray(image).ndim == 3:
-        image = Image.fromarray(np.asarray(image)[:,:,0])
+        image = Image.fromarray(np.asarray(image)[:, :, 0])
     
     # Calculate the number of tiles needed
     width, height = image.shape
@@ -501,12 +502,15 @@ def split_and_run_cnn(image, model, tilesize=2048, num_dim=3, edges=3, dims_rep=
             
             tile = tile.astype(np.uint8)
             
-            tile_tensor = tensor(tile).unsqueeze(0).to("cuda")
+            tile_tensor = tensor(tile).unsqueeze(0).to(device)
             
             # Run the CNN on the tile
             output = model(tile_tensor)
             
-            output = output[0, :, :, :].cpu().detach().numpy()
+            if device == "cuda":
+                output = output[0, :, :, :].cpu().detach().numpy()
+            else:
+                output = output[0, :, :, :].detach().numpy()
             
             output = np.moveaxis(output, [0], [2])
             

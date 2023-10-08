@@ -1,4 +1,4 @@
-call C:\Users\fhacesga\anaconda3\Scripts\activate.bat
+call C:\Users\fhace\anaconda3\Scripts\activate.bat
 
 call conda activate deeplearning
 

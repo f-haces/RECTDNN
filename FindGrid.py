@@ -93,7 +93,9 @@ def identifyBiggestContour(image, initial_image=None):
 
 def findSquares(image, model=None, 
         model_checkpoint=f"{data_dir}RLNN/checkpoint_091323.pth",
-        cnn_creation_params=None):
+        cnn_creation_params=None,
+        device="cuda",
+        ):
         
     if cnn_creation_params is None:
         cnn_creation_params = {
@@ -105,7 +107,7 @@ def findSquares(image, model=None,
     if model is None:
         model = RLNN(**cnn_creation_params)
         model.load_state_dict(torch.load(model_checkpoint)['model_state_dict'])
-    model = model.to("cuda")
+    model = model.to(device)
 
     tensor = transforms.Compose([transforms.ToTensor()])
     
@@ -130,7 +132,7 @@ def findSquares(image, model=None,
     return outputs, model
 
 def findKeypoints(image, model=None, num_classes=5, num_pyramids=3,
-                cnn_run_params=None, cnn_creation_params=None,
+                cnn_run_params=None, cnn_creation_params=None, device="cuda",
                 model_checkpoint=f"{data_dir}TPNN/checkpoint_091523_pyramids_2.pth"):
     
     if cnn_run_params is None:
@@ -139,7 +141,8 @@ def findKeypoints(image, model=None, num_classes=5, num_pyramids=3,
             "edges"      : 0,
             "dims_rep"   : None,
             "n_pyramids" : num_pyramids,
-            "num_dim"    : num_classes
+            "num_dim"    : num_classes,
+            "device"     : device
         }
     
     if cnn_creation_params is None:
@@ -156,7 +159,7 @@ def findKeypoints(image, model=None, num_classes=5, num_pyramids=3,
     if model is None:
         model = TPNN(**cnn_creation_params)
         model.load_state_dict(torch.load(model_checkpoint)['model_state_dict'])
-    model = model.to("cuda")
+    model = model.to(device)
     
     # PROCESS IMAGE
     for im in image:

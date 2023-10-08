@@ -58,7 +58,7 @@ class TPNN(nn.Module):
         
         self.softmax = nn.Softmax()
         
-        self.attention = SpatialAttention().to("cuda:0")
+        self.attention = SpatialAttention()
         
         self.verbose_level = int(verbose_level)
         
