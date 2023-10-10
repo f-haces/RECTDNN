@@ -13,3 +13,5 @@ ZZZ_ScrapFiles/
 *.pth
 *.png
 *.pgw
+
+__pycache__

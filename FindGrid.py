@@ -114,7 +114,7 @@ def findSquares(image, model=None,
     # INPUT IMAGE AND PREP
     shape = image.shape
     image = cv2.resize(image, (512, 512))   
-    image_prep = tensor(image).unsqueeze(0).to("cuda")
+    image_prep = tensor(image).unsqueeze(0).to(device)
 
     # PROCESS IMAGE
     outputs = model(image_prep)
@@ -387,53 +387,56 @@ def draw_lines_to_image(lines, image_size, line_color=(255), background_color=(0
     return np.asarray(image)
     
     
-def get_overlapping_lines(lines_or, image_or, threshold, processing_size=2400, verbose=True):
+def get_overlapping_lines(lines_or, image_or, threshold, 
+                          processing_size=2400, 
+                          verbose=True,
+                          dilate_size=3):
     
+    # GET RESCALING FACTORS AND PROCESSING SIZES 
     scale = processing_size / np.max(list(image_or.shape))
     scale_x, scale_y = scale, scale
     processing_size = (int(image_or.shape[1] * scale), int(image_or.shape[0] * scale))
-    
-    # image = cv2.dilate(np.array(image_or).astype(np.uint8), np.ones((3,3), np.uint8), iterations=3)
-    # image = cv2.resize(image.astype(np.float32), processing_size, cv2.INTER_AREA)
-    # image = np.where(np.array(image) > 0, 1, 0).astype(np.uint8)
-    
-    image = cv2.dilate(np.array(image_or).astype(np.uint8), np.ones((3,3), np.uint8), iterations=3)
+
+    # DILATE TO IMPROVE DETECTABILITY
+    image = cv2.dilate(np.array(image_or).astype(np.uint8), np.ones((3,3), np.uint8), iterations=dilate_size)
     image = cv2.resize(image.astype(np.uint8), processing_size)
-    cv2.imwrite("tempfiles/test.png", image)
+    cv2.imwrite("tempfiles/test.png", image) # SAVE TO EXAMINE
     
+    # RESCALE LINES TO PROCESSING SIZE
     lines = rescale_lines(lines_or, scale_x, scale_y)
     
-    # Create an empty image to mark overlapping regions
+    # CREATE EMPTY IMAGE TO MARK OVERLAPPING REGIONS
     overlap_image = np.full(image.shape, 0)
     overlap_image_fr = Image.fromarray(overlap_image.copy().astype(np.uint8))
     
-    # Loop through each line
+    # FOR EACH LINE
     overlapping_lines = []
     overlapping_values = []
-    
     for i, line in tqdm(enumerate(lines), total=len(lines), disable=~verbose):
                 
+        # UNPACK LINE AND DRAW IT (A BIT THICK) ON A COPY OF EMPTY IMAGE
         x1, y1, x2, y2 = [int(x) for x in line]
         line_image = overlap_image_fr.copy()
         line_draw = ImageDraw.Draw(line_image)
         line_draw.line((x1, y1, x2, y2), fill=1, width=5)
         
+        # STRUCTURE TO SHOW HOW MANY PIXELS THE LINE WOULD ENCOMPASS NORMALLY
         line_image_thresh = overlap_image_fr.copy()
         line_draw = ImageDraw.Draw(line_image_thresh)
         line_draw.line((x1, y1, x2, y2), fill=1, width=1)
         
+        # OVERLAP ANALYSIS: COUNT OVERLAPPING PIXELS 
         overlap = np.logical_and(image, line_image)
         overlap_count = np.count_nonzero(overlap)
+        
+        # CALCULATE THRESHOLD ON GIVEN LINE
         threshold_pixels = np.count_nonzero(line_image_thresh) * threshold
-        threshold_pixels = threshold_pixels if threshold_pixels != 0 else 1
         
-        # if True:# overlap_count >= threshold_pixels // 2:
-        #     test = np.dstack((image, line_image, line_image_thresh))
-        #     plt.imsave(f"tempfiles/test{i}.png", test * 255)
-        
-        if overlap_count >= threshold_pixels:
+        # ONLY EXPORT IF ANY PIXELS ARE FOUND AND THRESHOLD IS MET 
+        if overlap_count >= threshold_pixels and threshold_pixels != 0:
             overlapping_lines.append(lines_or[i])
             
+        # EXPORT VALUES OF LINES
         overlapping_values.append(overlap_count / threshold_pixels)
         
     return overlapping_lines, overlapping_values
@@ -639,29 +642,31 @@ def FindGrid(classifications, effectiveArea, key, image_path, verbose=True):
     if verbose:
         plotLines(image_or, filtered_lines, savedir=f"tempfiles/{filename}_02_azimuthfiltering.png")
 
-    # Extend lines to edges and filter by distance between lines
+    # EXTEND LINES TO EDGES AND FILTER LINES BY DISTANCE OF EDGEPOINTS
     extended_lines = extend_lines_to_edges(filtered_lines, image_or.shape)
     if verbose:
         plotLines(image_or, extended_lines, savedir=f"tempfiles/{filename}_03_lineextension.png")
-
-    # Filter lines by distance between endpoints and re-extend
     min_distance = 50 * np.sqrt(scale_x ** 2 + scale_y ** 2)
     filtered_lines, filtered_idx = filter_lines_by_distance(extended_lines, min_distance)
-    extended_lines = extend_lines_to_edges(filtered_lines, image_or.shape)
+
+    # EXTEND LINES TO ENSURE CROSSING
+    # extended_lines = extend_lines_to_edges(filtered_lines, image_or.shape)
+    extended_lines = extend_lines(filtered_lines, 50)
     if verbose:
         plotLines(image_or, extended_lines, savedir=f"tempfiles/{filename}_04_distancefiltering.png")
 
-    # Clip lines
+    # CLIP LINES BY EACH INTERSECTION
     lines_shp   = lines_to_linestrings(filtered_lines)
     split_lines = linestrings_to_lines(unary_union(lines_shp))
     if verbose:
         plotLines(image_or, extended_lines, savedir=f"tempfiles/{filename}_05_lineclipping.png")
 
+    # ONLY KEEP OVERLAPPING LINES
     overlapping_lines, overlap_values = get_overlapping_lines(split_lines, 
                                                              thinimage, 
                                                              0.8,
                                                              verbose=verbose)
-    
+
     if verbose:
         plotLines(image_or, overlapping_lines, savedir=f"tempfiles/{filename}_06_overlappinglines.png")
     

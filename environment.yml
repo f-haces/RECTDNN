@@ -1,4 +1,4 @@
-name: deeplearning
+name: georect
 channels:
   - pytorch
   - conda-forge
