@@ -77,6 +77,7 @@ class NN_Multiclass(Dataset):
                  resize=False, 
                  only_true=False, 
                  resize_def=2048, 
+                 flip_outputs=False,
                  cropsize=512):
         
         self.input_folder = input_folder
@@ -94,7 +95,7 @@ class NN_Multiclass(Dataset):
             image = Image.fromarray(np.array(image).astype(np.uint8))
             self.images_unscaled.append(image)
                 
-        self.targets_unscaled = loadClasses(self.target_folder, fns=self.image_filenames)
+        self.targets_unscaled = loadClasses(self.target_folder, fns=self.image_filenames, flip=flip_outputs)
         
         if resize:            
             self.images  = dynamic_resize(self.images_unscaled , (resize_def, resize_def))
@@ -218,7 +219,7 @@ class RandomPyramidCrop(object):
         
         return {'image': img, 'target': target}
 
-def loadClasses(folder_path, fns=None):
+def loadClasses(folder_path, fns=None, flip=False):
     class_folders = os.listdir(folder_path)
     labels = []
     image_names = {}
@@ -261,6 +262,8 @@ def loadClasses(folder_path, fns=None):
                 if output is None:
                     output = np.zeros(current_image.shape)
                 
+                if flip:
+                    current_image = np.where(current_image <= 0, 1, 0)
                 
                 output = np.where(current_image > 0, i+1, output)
             except:
