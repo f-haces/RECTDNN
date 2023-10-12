@@ -1,30 +1,12 @@
 # PYTHON IMPORTS
-import os
-import copy
 from tqdm.notebook import trange, tqdm
-
-# IMAGE IMPORTS 
-from PIL import Image
-import cv2
-
-# DATA IMPORTS 
-import random
-import h5py
-import numpy as np
 
 # PLOTTING
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
 
 # NEURAL NETWORK
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset
-from torchvision import transforms, datasets
-from torchvision.transforms import ToPILImage, GaussianBlur
-from torchvision.transforms import Compose, RandomCrop, ToTensor, Normalize
-import torch.optim.lr_scheduler as lr_scheduler
 import torchvision.models as models
 
 class SpatialAttention(nn.Module):
