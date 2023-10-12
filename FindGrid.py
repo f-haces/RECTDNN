@@ -1,6 +1,6 @@
 # PYTHON IMPORTS
-import os, copy, math, re
-from tqdm.notebook import trange, tqdm
+import os, math, re
+from tqdm.notebook import tqdm
 from fuzzywuzzy import fuzz
 
 # IMAGE IMPORTS 
@@ -8,12 +8,11 @@ from PIL import Image, ImageDraw
 import cv2
 
 # DATA IMPORTS 
-import random, h5py, glob
+import random
 import numpy as np
 
 # PLOTTING
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
 
 # NEURAL NETWORK
 import torch
@@ -223,7 +222,7 @@ def plotLines(original_image, lines, fig=None, mask=None, color=(0, 0, 255), fig
     
     if savedir is not None:
         fig.savefig(savedir)
-    
+
     return fig
 
 def calculate_scale_factors_small(original_size, target_size):
