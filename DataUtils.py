@@ -72,6 +72,7 @@ def extract_numerical_chars(text):
 class NN_Multiclass(Dataset):
     def __init__(self, input_folder, target_folder, 
                  transform=None, 
+                 input_only_transform=None,
                  crop=True, 
                  n_pyramids=0,
                  resize=False, 
@@ -89,6 +90,7 @@ class NN_Multiclass(Dataset):
         self.n_pyramids = n_pyramids
         self.images_unscaled = list()        
         self.onlytrueoutputs = only_true
+        self.input_transform = input_only_transform
         
         for fn in self.image_filenames:
             image = Image.open(os.path.join(self.input_folder, fn)).convert('L')
@@ -127,6 +129,9 @@ class NN_Multiclass(Dataset):
                 target_image = self.transform(target_image)
             else:
                 target_image = self.transform(target_image)
+            
+        if self.input_transform is not None:
+            input_image = self.input_transform(input_image)
             
         if self.crop:
             sample = {'image': input_image, 'target': target_image}

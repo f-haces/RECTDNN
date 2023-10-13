@@ -129,6 +129,46 @@ def findSquares(image, model=None,
     torch.cuda.empty_cache()
     
     return outputs, model
+    
+def findCounty(image, model=None, 
+        model_checkpoint=f"{data_dir}CLNN/checkpoint_101123.pth",
+        cnn_creation_params=None,
+        device="cuda",
+        ):
+        
+    if cnn_creation_params is None:
+        cnn_creation_params = {
+            "finalpadding" : 1,
+            "num_classes"  : 2
+        }
+    
+    # Initialize model
+    if model is None:
+        model = RLNN(**cnn_creation_params)
+        model.load_state_dict(torch.load(model_checkpoint)['model_state_dict'])
+    model = model.to(device)
+
+    tensor = transforms.Compose([transforms.ToTensor()])
+    
+    # INPUT IMAGE AND PREP
+    shape = image.shape
+    image = cv2.resize(image, (512, 512))   
+    image_prep = tensor(image).unsqueeze(0).to(device)
+
+    # PROCESS IMAGE
+    outputs = model(image_prep)
+    outputs = outputs[0, :, :, :].detach().cpu().numpy()
+    
+    # POSTPROCESS
+    outputs = outputs * 255
+    outputs = outputs.astype(np.uint8)
+    outputs = np.moveaxis(outputs, 0, 2)
+    
+    outputs = cv2.resize(outputs, (shape[1], shape[0]))
+    model = model.to("cpu")
+    torch.cuda.empty_cache()
+    
+    return outputs, model
 
 def findKeypoints(image, model=None, num_classes=5, num_pyramids=3,
                 cnn_run_params=None, cnn_creation_params=None, device="cuda",
