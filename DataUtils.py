@@ -91,6 +91,7 @@ class NN_Multiclass(Dataset):
         self.images_unscaled = list()        
         self.onlytrueoutputs = only_true
         self.input_transform = input_only_transform
+        self.tensor = transforms.Compose([transforms.ToTensor()])
         
         for fn in self.image_filenames:
             image = Image.open(os.path.join(self.input_folder, fn)).convert('L')
@@ -132,6 +133,9 @@ class NN_Multiclass(Dataset):
             
         if self.input_transform is not None:
             input_image = self.input_transform(input_image)
+            
+        input_image  = self.tensor(input_image)
+        target_image = self.tensor(target_image)
             
         if self.crop:
             sample = {'image': input_image, 'target': target_image}
