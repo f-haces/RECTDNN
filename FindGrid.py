@@ -131,7 +131,7 @@ def findSquares(image, model=None,
     return outputs, model
     
 def findCounty(image, model=None, 
-        model_checkpoint=f"{data_dir}CLNN/checkpoint_101123.pth",
+        model_checkpoint=f"{data_dir}CLNN/checkpoint_101423.pth",
         cnn_creation_params=None,
         device="cuda",
         ):
@@ -152,7 +152,7 @@ def findCounty(image, model=None,
     
     # INPUT IMAGE AND PREP
     shape = image.shape
-    image = cv2.resize(image, (512, 512))   
+    image = cv2.resize(image, (1024, 1024))   
     image_prep = tensor(image).unsqueeze(0).to(device)
 
     # PROCESS IMAGE
@@ -167,6 +167,8 @@ def findCounty(image, model=None,
     outputs = cv2.resize(outputs, (shape[1], shape[0]))
     model = model.to("cpu")
     torch.cuda.empty_cache()
+    
+    # outputs = cv2.Canny(outputs, 50,100)
     
     return outputs, model
 
