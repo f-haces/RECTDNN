@@ -7,7 +7,7 @@ from datetime import datetime
 
 # IMAGE IMPORTS
 import cv2
-from PIL import Image
+from PIL import Image, ImageFilter
 
 # GIS IMPORTS
 import fiona, pyproj
@@ -68,10 +68,78 @@ def extract_numerical_chars(text):
             break
     return numerical_chars
     
+class ColorJitter_Regions(object):
+    def __init__(self, brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1, apply_every=0.5):
+        self.apply_every = apply_every
+        self.brightness = brightness
+        self.contrast = contrast
+        self.saturation = saturation
+        self.hue = hue
+        self.color_jitter = transforms.ColorJitter(self.brightness, self.contrast, self.saturation, self.hue)
+
+    def __call__(self, image):
+        width, height = image.size
+        
+        # RANDOMLY DO IT OR NOT
+        if random.uniform(0, 1) < self.apply_every:
+            return image
+        
+        # Create a random mask with values between 0 and 1
+        mask = np.random.rand(height, width)
+        mask = Image.fromarray((mask * 255).astype(np.uint8))
+
+        # Apply ColorJitter transformations to the image based on the mask
+        jittered_image = self.color_jitter(image)
+        jittered_image = Image.blend(jittered_image, mask, 0.5)
+        image = Image.blend(image, jittered_image, 0.5)
+
+        return image
+    
+class Blur_Regions(object):
+    def __init__(self, max_kernel_size=64, max_sigma=1.5, mask_size=(64, 64), apply_every=0.5):
+        self.apply_every = apply_every
+        self.max_kernel_size = max_kernel_size
+        self.max_sigma = max_sigma
+        self.mask_size = mask_size
+
+    def __call__(self, image):
+        
+        # RANDOMLY DO IT OR NOT
+        if random.uniform(0, 1) < self.apply_every:
+            return image
+        
+        # Randomly select kernel size and sigma
+        kernel_size = random.randint(1, self.max_kernel_size)
+        sigma = random.uniform(0, self.max_sigma)
+
+        # Create a random mask
+        mask = self.generate_random_mask(image.size, self.mask_size)
+
+        # Apply Gaussian blur to the image based on the mask
+        image = self.apply_blur_with_mask(image, mask, kernel_size, sigma)
+        return image
+
+    def generate_random_mask(self, image_size, mask_size):
+        # Generate a random mask using numpy
+        mask = np.random.rand(*mask_size)
+        mask = (mask - mask.min()) / (mask.max() - mask.min())  # Normalize to [0, 1]
+        
+        # Resize the mask to match the image size
+        mask = Image.fromarray((mask * 255).astype(np.uint8))
+        mask = mask.resize(image_size, Image.BILINEAR)
+        
+        return mask
+
+    def apply_blur_with_mask(self, image, mask, kernel_size, sigma):
+        # Apply Gaussian blur to the image based on the mask
+        image_blurred = Image.blend(mask, image.filter(ImageFilter.GaussianBlur(radius=sigma)), 0.5)
+        image = Image.blend(image_blurred, image, 0.5)
+        return image
     
 class NN_Multiclass(Dataset):
     def __init__(self, input_folder, target_folder, 
                  transform=None, 
+                 input_only_transform=None,
                  crop=True, 
                  n_pyramids=0,
                  resize=False, 
@@ -89,6 +157,8 @@ class NN_Multiclass(Dataset):
         self.n_pyramids = n_pyramids
         self.images_unscaled = list()        
         self.onlytrueoutputs = only_true
+        self.input_transform = input_only_transform
+        self.tensor = transforms.Compose([transforms.ToTensor()])
         
         for fn in self.image_filenames:
             image = Image.open(os.path.join(self.input_folder, fn)).convert('L')
@@ -127,6 +197,12 @@ class NN_Multiclass(Dataset):
                 target_image = self.transform(target_image)
             else:
                 target_image = self.transform(target_image)
+            
+        if self.input_transform is not None:
+            input_image = self.input_transform(input_image)
+            
+        input_image  = self.tensor(input_image)
+        target_image = self.tensor(target_image)
             
         if self.crop:
             sample = {'image': input_image, 'target': target_image}
