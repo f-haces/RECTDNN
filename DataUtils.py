@@ -201,8 +201,11 @@ class NN_Multiclass(Dataset):
         if self.input_transform is not None:
             input_image = self.input_transform(input_image)
             
-        input_image  = self.tensor(input_image)
-        target_image = self.tensor(target_image)
+        if not isinstance(input_image, torch.Tensor):
+            input_image  = self.tensor(input_image)
+            
+        if not isinstance(target_image, torch.Tensor):
+            target_image = self.tensor(target_image)
             
         if self.crop:
             sample = {'image': input_image, 'target': target_image}
