@@ -9,6 +9,77 @@ import torch
 import torch.nn as nn
 import torchvision.models as models
 
+def split_and_run_cnn(image_path, model, tilesize=1024, overhang_size=2):
+        
+    tensor = transforms.Compose([
+        transforms.ToTensor(),
+    ])
+    
+    num_classes = 2
+    
+    # Load the image
+    image = Image.open(image_path)
+    
+    # Calculate the number of tiles needed
+    width, height = image.size
+    num_tiles_x = (width + tilesize-1) // tilesize
+    num_tiles_y = (height + tilesize-1) // tilesize
+    
+    # Create an empty list to store the output tiles
+    output_tiles = []
+    
+    output_gen = np.zeros((width, height, num_classes))
+    
+    # Iterate over each tile
+    for tile_x in tqdm(range(num_tiles_x)):
+        for tile_y in range(num_tiles_y):
+                        
+            # Calculate the coordinates for the current tile
+            x0 = tile_x * tilesize
+            y0 = tile_y * tilesize
+            x1 = min(x0 + tilesize, width)
+            y1 = min(y0 + tilesize, height)
+            
+            # Crop the image to the current tile
+            tile = image.crop((x0, y0, x1, y1))
+            
+            # Pad the tile if needed
+            pad_width = tilesize - tile.width
+            pad_height = tilesize - tile.height
+            if pad_width > 0 or pad_height > 0:
+                padding = ((0, pad_height), (0, pad_width))
+                tile = np.pad(tile, padding, mode='constant')
+            
+            # Preprocess the tile
+            tile = np.array(tile)
+            
+            #if np.max(tile) == 1:
+            #    tile = tile * 255
+            
+            # tile = np.where(tile > 127, 255, 0).astype(np.uint8)
+            
+            tile_tensor = tensor(tile).unsqueeze(0).to("cuda")
+            
+            # Run the CNN on the tile
+            output = model(tile_tensor)
+            output = output[0, 1:, :, :].cpu().detach().numpy().T
+            
+            # Store the output tile
+            
+            x_fin = tilesize - pad_width
+            y_fin = tilesize - pad_height
+            
+            temp = output[0:x_fin, 0:y_fin, :]
+            
+            temp[:, :overhang_size, :] = 0
+            temp[:, overhang_size:, :] = 0
+            temp[:, :, overhang_size:] = 0
+            temp[:, :, :overhang_size] = 0
+            
+            output_gen[x0:x1, y0:y1, :] = temp
+        torch.cuda.empty_cache()
+    return output_gen.T
+
 class SpatialAttention(nn.Module):
     def __init__(self):
         super(SpatialAttention, self).__init__()
@@ -32,12 +103,13 @@ class SpatialAttention(nn.Module):
 
         return attended_feature_map
 
-
 class TPNN(nn.Module):
 
     def __init__(self, num_classes=2, finalpadding=0, inputsize=1, verbose_level=1):
         super(TPNN, self).__init__()
         
+        self.num_classes = num_classes
+
         self.softmax = nn.Softmax()
         
         self.attention = SpatialAttention()

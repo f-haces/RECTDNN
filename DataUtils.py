@@ -2,12 +2,15 @@
 import os, glob, zipfile, random
 import numpy as np
 from tqdm.notebook import tqdm
-from shutil import copyfile
-from datetime import datetime
+
 
 # IMAGE IMPORTS
 import cv2
 from PIL import Image, ImageFilter
+
+'''
+from shutil import copyfile
+from datetime import datetime
 
 # GIS IMPORTS
 import fiona, pyproj
@@ -20,27 +23,25 @@ import rasterio as rio
 from rasterio.mask import mask
 from scipy.spatial import cKDTree
 
-# NEURAL NETWORK
-import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset
-from torchvision import transforms, datasets
-from torchvision.transforms import ToPILImage, GaussianBlur
-from torchvision.transforms import Compose, RandomCrop, ToTensor, Normalize
-import torch.optim.lr_scheduler as lr_scheduler
-import torchvision.models as models
-from sklearn.preprocessing import LabelEncoder, OneHotEncoder
+'''
+
+# NEURAL NETWORK
+import torch
+from torch.utils.data import Dataset
+from torchvision import transforms
+from torchvision.transforms import RandomCrop
 
 # PLOTTING IMPORTS
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
 # CUSTOM UTILITIES
-from WorldFileUtils import *
-from GeometryUtils import *
-from icp import *
-from DataUtils import *
+# from WorldFileUtils import *
+# from GeometryUtils import *
+# from icp import *
+# from DataUtils import *
 
 Image.MAX_IMAGE_PIXELS = 933120000
 
@@ -227,8 +228,6 @@ class NN_Multiclass(Dataset):
             #    target_image[channel, :, :] = np.where(mask, target_image[channel, :, :], 0)
         
         return input_image.float(), target_image, self.image_filenames[index]    
-
-
       
 class RandomCrop(object):
     def __init__(self, size):
@@ -257,8 +256,7 @@ class RandomCrop(object):
             target = target_i[:, i:i+new_h, j:j+new_w]
 
         return {'image': img, 'target': target}
-        
-        
+           
 class RandomPyramidCrop(object):
     def __init__(self, size, pyramid_depth):
         self.size = size
@@ -297,6 +295,11 @@ class RandomPyramidCrop(object):
         
         
         return {'image': img, 'target': target}
+
+def getClasses(dir):
+    classes = os.listdir(dir)
+    classes.insert(0, "background")
+    return classes
 
 def loadClasses(folder_path, fns=None, flip=False):
     class_folders = os.listdir(folder_path)
@@ -394,53 +397,17 @@ def dynamic_resize(images, target_size):
         output.append(Image.fromarray(resized_img))
 
     return output
- 
-'''
-def loadClasses(folder_path):
-    class_folders = os.listdir(folder_path)
-    labels = []
-    image_names = {}
 
-    # Iterate over the class folders
-    for class_folder in class_folders:
-        class_folder_path = os.path.join(folder_path, class_folder)
-        if os.path.isdir(class_folder_path):
-            image_files = os.listdir(class_folder_path)
-            # Iterate over the image files within the class folder
-            for file_name in image_files:
-                image_names[file_name] = True
-                labels.append(class_folder)
+def bomb_edges(image, size=2, dims=None):
+    if dims is None:
+        dims = range(image.shape[-1])
 
-    
-    classes = np.unique(labels)
-    outputs = list()
-    
-    for image_name in list(image_names.keys()):
-        output = None
-        for i, classification in enumerate(classes):
-            
-            fn = f"{folder_path}/{classification}/{image_name}"
-            
-            current_image = cv2.imread(fn)
-            current_image = np.asarray(current_image)
-            
-            if current_image.ndim == 3:
-                current_image = current_image[:, :, 0]
-            
-            if output is None:
-                output = np.zeros(current_image.shape)
-            
-            
-            output = np.where(current_image > 0, i+1, output)
-        outputs.append(Image.fromarray(output))
+    rep_value = np.max(image)
 
-    return outputs'''
-
-def bomb_edges(image, size=2, dims=[0,1,2]):
-    image[:, 0:size, dims] = 255
-    image[:, -size:, dims] = 255
-    image[0:size, :, dims] = 255
-    image[-size:, :, dims] = 255
+    image[:, 0:size, dims] = rep_value
+    image[:, -size:, dims] = rep_value
+    image[0:size, :, dims] = rep_value
+    image[-size:, :, dims] = rep_value
     
     c = np.setdiff1d([0,1,2], dims)
     image[:, 0:size, c] = 0
@@ -533,7 +500,7 @@ def get_pyramid(image, j, i, pyramid_depth, pyramid_size, plot=False):
         
     pyramid = np.dstack(pyramid)
     return pyramid
-    
+
 def split_and_run_cnn(image, model, tilesize=2048, 
     num_dim=3, edges=3, dims_rep=None, n_pyramids=3, device="cuda"):
 
@@ -544,62 +511,56 @@ def split_and_run_cnn(image, model, tilesize=2048,
         transforms.ToTensor(),
     ])
     
-    # Load the image
-    # image = Image.open(image_path)
-    
     if np.asarray(image).ndim == 3:
-        image = Image.fromarray(np.asarray(image)[:, :, 0])
-    
-    # Calculate the number of tiles needed
+        image = np.asarray(image)[:, :, 0]
+
+    # CALCULATE HOW MANY TILES WE NEED IN X AND Y DIRECTIONS
     width, height = image.shape
     num_tiles_x = (width + tilesize-1) // tilesize
     num_tiles_y = (height + tilesize-1) // tilesize
     
-    # Create an empty list to store the output tiles
+    # OUTPUT STRUCTURES
     output_tiles = []
+    output_gen = np.zeros((width, height, model.num_classes))
     
-    output_gen = np.zeros((width, height, num_dim))
-    
-    # Iterate over each tile
+    # FOR EACH TILE
     for tile_x in tqdm(range(num_tiles_x)):
         for tile_y in range(num_tiles_y):
                         
-            # Calculate the coordinates for the current tile
+            # COORDINATES OF CURRENT TILE
             x0 = tile_x * tilesize
             y0 = tile_y * tilesize
             x1 = min(x0 + tilesize, width)
             y1 = min(y0 + tilesize, height)
-            
             x_pad = x1 - x0
             y_pad = y1 - y0
             
             # GET PYRAMIDS TO PROCESS IMAGE
             tile = get_pyramid(image, x0, y0, n_pyramids, tilesize)
             
-            # Preprocess the tile
-            tile = np.array(tile)
-            
-            if np.max(tile) == 1:
-                tile = tile * 255
-            
-            tile = tile.astype(np.uint8)
-            
-            tile_tensor = tensor(tile).unsqueeze(0).to(device)
-            
-            # Run the CNN on the tile
+            # TILE PREPROCESSING
+            tile = np.array(tile)                               # AS NUMPY ARRAY
+            tile = tile * 255 if np.max(tile) == 1 else tile    # SCALE TO UINT 8
+            tile = tile.astype(np.uint8)                        # CHANGE DATA TYPE
+            tile_tensor = tensor(tile).unsqueeze(0).to(device)  # TO DEVICE
+
+            # RUN CNN ON TILE
             output = model(tile_tensor)
             
+            # PROCESS OUTPUTS OUT OF DEVICE
             if device == "cuda":
                 output = output[0, :, :, :].cpu().detach().numpy()
             else:
                 output = output[0, :, :, :].detach().numpy()
             
-            output = np.moveaxis(output, [0], [2])
-            
             # POSTPROCESS 
+            output = np.moveaxis(output, [0], [2])                      # CHANGE CHANNELS SO BANDS ARE IN LAST DIMENSION
+            output_tiles.append(output.copy())                          # APPEND TILE TO LIST
             if edges != 0:
-                output = bomb_edges(output, size=edges, dims=dims_rep)
+                output = bomb_edges(output, size=edges, dims=dims_rep)  # SET EDGE VALUES FOR TILE TO 0
             
+            # PUT IT WITH THE REST
             output_gen[x0:x1, y0:y1, :] = output[:x_pad, :y_pad, :]
+        del output, tile, tile_tensor
         torch.cuda.empty_cache()
-    return output_gen
+    return output_gen, output_tiles
