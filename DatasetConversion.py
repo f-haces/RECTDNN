@@ -1,6 +1,59 @@
-import os, cv2, json, pickle
+import os, cv2, json, pickle, glob
 import numpy as np
 from tqdm.autonotebook import tqdm
+
+def predictToRetrain(model, input_dir, pkl_dir, coco_dir,
+                     target_size=None, 
+                     original_shapes=None, 
+                     category_labels=None,
+                     categories=None
+                     ):
+    if target_size is None:
+        target_size = 1024
+
+    if original_shapes is None:
+        original_shapes = []
+    
+    if category_labels is None:
+        category_labels = {
+            0 : "County",
+            1 : "Tile",
+            2 : "Box",
+            3 : "Legend"
+        }
+
+    if categories is None:
+        categories=[0, 1]
+
+    original_shapes
+
+    results = model(glob.glob(input_dir+"\\*"), imgsz=target_size,)
+
+    createPickleDataset(results, pkl_dir)
+    cocodata = toCOCO(coco_dir, pkl_dir, f"{coco_dir}/annotations", "", category_labels, categories)
+
+    
+def createPickleDataset(results, pkl_dir):
+    # pkl_dir = f"{output_dataset_dir}/pkl"
+    os.makedirs(pkl_dir, exist_ok=True)
+
+    for i, result in enumerate(results[0]):
+
+        fn = os.path.basename(result[0].path)
+        
+        curr_dict = {'labels' : result.boxes.cls.to('cpu').numpy().tolist(), 'boxes' : []}
+
+        boxes = result.boxes.xyxy.cpu().numpy()
+        # print(boxes)
+        boxes[:, [0, 2]] = boxes[:, [0, 2]]
+        boxes[:, [1, 3]] = boxes[:, [1, 3]]
+        # print(boxes)
+        curr_dict['boxes'] = np.vstack([boxes[:, 1], boxes[:, 2], boxes[:, 3], boxes[:, 0]]).T
+        
+        
+        with open(os.path.join(pkl_dir, fn[:-3]+"pkl"), 'wb') as handle:
+            pickle.dump(curr_dict, handle)
+
 
 def toCOCO(images_folder, pkl_folder, output_file, relative_image_path, category_labels, categories):
     
