@@ -227,8 +227,8 @@ def getBoundaryPoints(row, distance=20):
     if row["geometry"] is None:
         return None
     elif isinstance(row["geometry"], MultiPolygon):
-        largest_polygon_area = np.argmax([a.area for a in row["geometry"]])
-        largest_polygon = row["geometry"][largest_polygon_area].simplify(tolerance=20)
+        largest_polygon_area = np.argmax([a.area for a in row["geometry"].geoms])
+        largest_polygon = row["geometry"].geoms[largest_polygon_area].simplify(tolerance=20)
         largest_polygon = largest_polygon.boundary
     else:
         largest_polygon = row["geometry"].boundary
@@ -314,10 +314,9 @@ def findTiles(image_fn, model=None,
     
     results = model(image_fn, imgsz=target_size)
 
+    # GET CLASSES AND CONFIDENCES OF EACH RESULT
     classes = results[0].boxes.data.numpy()[:, -1]
     conf    = results[0].boxes.data.numpy()[:, -2]
-
-    slice = np.logical_and(classes==0, conf > 0.92)
 
     # GOTTA FIND CORRECT FILE BC RESIZED WERE SAVED WITH PNG EXTENSION
     basen = os.path.basename(results[0].path)[:-4]
@@ -325,20 +324,35 @@ def findTiles(image_fn, model=None,
     key = findKey(basen)
 
     image = Image.open(in_fn)
+    width, height = image.size
+    im_size_arry  = np.array([width, height, width, height])
 
+    # OUTPUT STRUCTURE
     outputs = {}
 
+    # FOR TILES
+    slice = np.logical_and(classes==0, conf > 0.92)
     for i in np.where(slice)[0]: 
         
         # GET TILE DATA
         bbox = results[0].boxes.xyxyn.numpy()[i]
         data = extract_bounded_area(image, bbox)
 
+        bbox = bbox * im_size_arry
+
         # GET ID FROM TILE
         text = pytesseract.image_to_string(data, config='--psm 12 --oem 3') # -c tessedit_char_whitelist=0123456789
         word = find_word_with_key(text, key, threshold=80, verbose=False)
 
         outputs[word] = {"bbox" : bbox, "data" : data} # (bbox, data)
+
+    # FOR COUNTY - GET MOST LIKELY BOX CLASSIFIED AS COUNTY
+    county_conf = conf.copy()
+    county_conf[classes != 1] = 0
+    slice = np.argmax(county_conf)
+
+    bbox = results[0].boxes.xyxyn.numpy()[slice]
+    outputs["county"] = {"bbox" : bbox * im_size_arry, "data" : extract_bounded_area(image, bbox)}
 
     return outputs, model
 
@@ -468,3 +482,24 @@ def findKeypoints(image, model=None, num_classes=5, num_pyramids=3,
     
     # return (background.T, grid.T, roads.T), model
     return outputs, model
+
+def find_bbox_yolo(mydict : dict) -> np.array:
+
+    """
+    Extracts the maximum Bounding Box of YOLO outputs put through
+
+    Parameters:
+        mydict (dict): Nested dict with format {TileName (STR) : {"bbox" : [x_min, y_min, x_max, y_max] ... }}
+
+    Returns:
+        bounds (np.array): Numpy array with bounds of all found tiles.
+    """
+
+    mylist = []
+    for i, (k, v) in enumerate(mydict.items()):
+        # print(k, v)
+        mylist.append(v["bbox"])
+
+    mylist = np.array(mylist)
+
+    return np.array([np.min(mylist[:, 0]), np.min(mylist[:, 1]), np.max(mylist[:, 2]), np.max(mylist[:, 3])])
