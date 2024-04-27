@@ -45,7 +45,6 @@ def best_fit_transform(A, B):
 
     return T, R, t
 
-
 def nearest_neighbor(src, dst):
     '''
     Find the nearest (Euclidean) neighbor in dst for each point in src
@@ -64,6 +63,20 @@ def nearest_neighbor(src, dst):
     distances, indices = neigh.kneighbors(src, return_distance=True)
     return distances.ravel(), indices.ravel()
 
+def plotICP(reprojected_points, plot_skip=2, ):
+    icp_iterations = len(reprojected_points)
+    fig, ax = plt.subplots()
+    colormap = plt.get_cmap('RdYlGn') 
+
+    ax.scatter(coords_shp_proc_bl[:, 0], coords_shp_proc_bl[:, 1], color=colormap(0), s=0.5)
+    ax.scatter(coords_ras_proc_bl[:, 0], coords_ras_proc_bl[:, 1], color="black", s=0.5)
+
+    for i in np.arange(plot_skip, icp_iterations, plot_skip):
+        ax.scatter(reprojected_points[i][:, 0], reprojected_points[i][:, 1], color=colormap(i / icp_iterations), s=0.1)
+        
+    ax.grid()
+    ax.axis("equal")
+    return ax
 
 def icp(A, B, init_pose=None, max_iterations=20, tolerance=0.001):
     '''

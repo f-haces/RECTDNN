@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 
 # NEURAL NETWORK
 import torch
+import ultralytics
 
 # SHAPES IMPORTS
 import geopandas as gpd
@@ -45,6 +46,7 @@ def initialize():
     
     return data_dir
     
+global data_dir
 data_dir = initialize() 
 
 # Process the image and get the result
@@ -89,133 +91,6 @@ def identifyBiggestContour(image, initial_image=None):
     
     
     return rectangles_image, contours[idx], approx
-
-def findSquares(image, model=None, 
-        model_checkpoint=f"{data_dir}RLNN/checkpoint_091323.pth",
-        cnn_creation_params=None,
-        device="cuda",
-        ):
-        
-    if cnn_creation_params is None:
-        cnn_creation_params = {
-            "finalpadding" : 1,
-            "num_classes"    : 3
-        }
-    
-    # Initialize model
-    if model is None:
-        model = RLNN(**cnn_creation_params)
-        model.load_state_dict(torch.load(model_checkpoint)['model_state_dict'])
-    model = model.to(device)
-
-    tensor = transforms.Compose([transforms.ToTensor()])
-    
-    # INPUT IMAGE AND PREP
-    shape = image.shape
-    image = cv2.resize(image, (512, 512))   
-    image_prep = tensor(image).unsqueeze(0).to(device)
-
-    # PROCESS IMAGE
-    outputs = model(image_prep)
-    outputs = outputs[0, :, :, :].detach().cpu().numpy()
-    
-    # POSTPROCESS
-    outputs = outputs * 255
-    outputs = outputs.astype(np.uint8)
-    outputs = np.moveaxis(outputs, 0, 2)
-    
-    outputs = cv2.resize(outputs, (shape[1], shape[0]))
-    model = model.to("cpu")
-    torch.cuda.empty_cache()
-    
-    return outputs, model
-    
-def findCounty(image, model=None, 
-        model_checkpoint=f"{data_dir}CLNN/checkpoint_101423.pth",
-        cnn_creation_params=None,
-        device="cuda",
-        ):
-        
-    if cnn_creation_params is None:
-        cnn_creation_params = {
-            "finalpadding" : 1,
-            "num_classes"  : 2
-        }
-    
-    # Initialize model
-    if model is None:
-        model = RLNN(**cnn_creation_params)
-        model.load_state_dict(torch.load(model_checkpoint)['model_state_dict'])
-    model = model.to(device)
-
-    tensor = transforms.Compose([transforms.ToTensor()])
-    
-    # INPUT IMAGE AND PREP
-    shape = image.shape
-    image = cv2.resize(image, (1024, 1024))   
-    image_prep = tensor(image).unsqueeze(0).to(device)
-
-    # PROCESS IMAGE
-    outputs = model(image_prep)
-    outputs = outputs[0, :, :, :].detach().cpu().numpy()
-    
-    # POSTPROCESS
-    outputs = outputs * 255
-    outputs = outputs.astype(np.uint8)
-    outputs = np.moveaxis(outputs, 0, 2)
-    
-    outputs = cv2.resize(outputs, (shape[1], shape[0]))
-    model = model.to("cpu")
-    torch.cuda.empty_cache()
-    
-    # outputs = cv2.Canny(outputs, 50,100)
-    
-    return outputs, model
-
-def findKeypoints(image, model=None, num_classes=5, num_pyramids=3,
-                cnn_run_params=None, cnn_creation_params=None, device="cuda",
-                model_checkpoint=f"{data_dir}TPNN/checkpoint_091523_pyramids_2.pth"):
-    
-    if cnn_run_params is None:
-        cnn_run_params = {
-            "tilesize"   : 2048,
-            "edges"      : 0,
-            "dims_rep"   : None,
-            "n_pyramids" : num_pyramids,
-            "num_dim"    : num_classes,
-            "device"     : device
-        }
-    
-    if cnn_creation_params is None:
-        cnn_creation_params = {
-            "num_classes" : num_classes,
-            "inputsize"   : num_pyramids,
-        }
-    
-    # Input handling
-    if isinstance(image, np.ndarray):
-        image = [image] # Make iterable if needed
-    
-    # Initialize model if needed
-    if model is None:
-        model = TPNN(**cnn_creation_params)
-        model.load_state_dict(torch.load(model_checkpoint)['model_state_dict'])
-    model = model.to(device)
-    
-    # PROCESS IMAGE
-    for im in image:
-        outputs = split_and_run_cnn(im, model, **cnn_run_params)
-    
-    # background, grid, roads = outputs[:, :, 0], outputs[:, :, 1], outputs[:, :, 2]
-    
-    model = model.to("cpu")
-    torch.cuda.empty_cache()
-    
-    outputs = outputs * 255
-    outputs = outputs.astype(np.uint8)
-    
-    # return (background.T, grid.T, roads.T), model
-    return outputs, model
 
 def extend_lines(lines, percentage):
     extended_lines = []
@@ -586,9 +461,6 @@ def line_detection(classifications, effectiveArea, image_or,
     resized_image = cv2.resize(classifications, target_dim, interpolation=cv2.INTER_LINEAR)
     
     # THRESHOLD IMAGES
-    # gray = np.logical_or(resized_image[:, :, 1].T > threshold, resized_image[:, :, 2].T > threshold) * 255
-    # gray = np.logical_or(resized_image[:, :, 1].T > threshold, 
-    #     resized_image[:, :, 2].T * (1 - certainty)> threshold) * 255
     gray = (resized_image[:, :, 4] > threshold) * 255
     gray = gray.astype(np.uint8)
     
@@ -655,7 +527,143 @@ def contours_to_shapely_polygons(contours, simplify_tolerance=10):
     points = [Point(point[0], point[1]) for point in contours]
     return Polygon(points).simplify(tolerance=simplify_tolerance)
 
-def FindGrid(classifications, effectiveArea, key, image_path, verbose=True):
+def FindGrid_analog(image, classifications, effectiveArea, key, image_path, verbose=True):    
+    
+    # DETECT LINES
+    lines, result_image, scale_x, scale_y, thinimage = line_detection(classifications, 
+                                                                      effectiveArea, 
+                                                                      image, 
+                                                                      line_length=50)
+    
+    writeImage(f"tempfiles/{filename}_01_linedetection.png", result_image, verbose)
+    writeImage(f"tempfiles/{filename}_01_thinimage.png", thinimage, verbose)
+
+    # FILTER BY MOST POPULAR ANGLES
+    angles = calcAngles(lines)
+    line_angles, line_indices, sorted_idx = filterLines_MostPopularAngles(np.array(angles), 0.5)
+    
+    # GET RESCALED LINES
+    rescaled_lines_ordered = np.array(lines)[sorted_idx]
+    filtered_lines = rescaled_lines_ordered[np.concatenate(line_indices).flatten()]
+    
+    if verbose:
+        fig = plotLines(image, filtered_lines, savedir=f"tempfiles/{filename}_02_azimuthfiltering.png")
+        plt.close(fig)
+
+    # EXTEND LINES TO EDGES AND FILTER LINES BY DISTANCE OF EDGEPOINTS
+    extended_lines = extend_lines_to_edges(filtered_lines, image.shape)
+    
+    if verbose:
+        fig = plotLines(image, extended_lines, savedir=f"tempfiles/{filename}_03_lineextension.png")
+        plt.close(fig)
+    min_distance = 50 * np.sqrt(scale_x ** 2 + scale_y ** 2)
+    filtered_lines_extended, filtered_idx = filter_lines_by_distance(extended_lines, min_distance)
+
+    # EXTEND LINES TO ENSURE CROSSING
+    extended_lines = extend_lines_to_edges(filtered_lines_extended, image.shape)
+    # extended_lines = extend_lines(filtered_lines[filtered_idx], 200)
+    if verbose:
+        fig = plotLines(image, extended_lines, savedir=f"tempfiles/{filename}_04_distancefiltering.png")
+        plt.close(fig)
+
+    # CLIP LINES BY EACH INTERSECTION
+    lines_shp   = lines_to_linestrings(filtered_lines_extended)
+    split_lines = linestrings_to_lines(unary_union(lines_shp))
+    if verbose:
+        fig = plotLines(image, extended_lines, savedir=f"tempfiles/{filename}_05_lineclipping.png")
+        plt.close(fig)
+
+    # WHICH LINES HAVE SIGNIFICANT OVERLAP WITH DARK PIXELS IN IMAGE?
+    overlapping_lines, overlap_values = get_overlapping_lines(split_lines, 
+                                                             thinimage, 
+                                                             0.75,
+                                                             verbose=verbose,
+                                                             dilate_size=3)
+    
+    print(overlap_values)
+
+    if verbose:
+        fig = plotLines(image, overlapping_lines, savedir=f"tempfiles/{filename}_06_overlappinglines.png")
+        plt.close(fig)
+
+    # EXTEND OVERLAPPING LINES
+    if verbose:
+        fig = plotLines(image, overlapping_lines, savedir=f"tempfiles/{filename}_06_overlappinglines_extended.png")
+        plt.close(fig)
+
+    # DRAW LINES IN IMAGE TO IDENIFY CONTOURS
+    bw_bounds = draw_lines_to_image(overlapping_lines, (image.shape[1], image.shape[0]))
+    writeImage(f"tempfiles/{filename}_06_drawnimage.png", bw_bounds, verbose)
+
+    # FIND CONTOURS
+    contours, hierarchy = cv2.findContours(bw_bounds, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+
+    # LOOP THROUGH HIGHEST HERARCHY
+    highest_level = np.max(hierarchy, axis=1).flatten()[3]
+    print(f"Highest Hierarchy: {highest_level} in {hierarchy.shape[1]} contours")
+    
+    # OUTPUT WHICH SQUARES WERE RECOGNIZED
+    if verbose:
+        filled_image = np.zeros(image.shape)
+        # FILL CONTOURS WITH RANDOM COLORS
+        for idx, contour in enumerate(contours):
+            if hierarchy[0][idx][3] == highest_level:  # ONLY CONTOURS WITH NO INNER CONTOURS
+                color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+                cv2.drawContours(filled_image, [contour], -1, color, thickness=cv2.FILLED)
+        writeImage(f"tempfiles/{filename}_06_recognizedsquares.png", filled_image, verbose)
+
+    # FIND WHICH CONTOURS CONTAIN WORDS
+    outdict = {}
+    for idx, contour in tqdm(enumerate(contours), total=len(contours), disable=~verbose):
+        if hierarchy[0][idx][3] == highest_level:  # ONLY CONTOURS WITH NO INNER CONTOURS
+            x, y, w, h = cv2.boundingRect(contour)
+        
+            # CROP THE IMAGE TO JUST CONTOUR
+            if image.ndim == 3:
+                cropped_region = image[y:y+h, x:x+w, 0]
+            else: 
+                cropped_region = image[y:y+h, x:x+w]
+            
+            # PAD WITH PERCENTANGE
+            cropped_region = pad_image_with_percentage(cropped_region, 20, 20)
+            
+            # WRITE IMAGE
+            writeImage(f"tempfiles/{filename}_07_{idx}.png", cropped_region, verbose)
+            
+            # Perform OCR using pytesseract
+            ocr_text = pytesseract.image_to_string(cropped_region,
+                                                  config='--psm 12 --oem 3')
+                                                  # -c tessedit_char_whitelist=0123456789
+            
+            # IF WE CAN'T FIND ANYTHING, CONTINUE
+            if len(ocr_text) == 0:
+                continue
+                
+            # CHECK IF THE KEY IS FOUND IN THE TILE, IF NOT CONTINUE
+            text = find_word_with_key(ocr_text, key, verbose=verbose)
+            if text is None:
+                continue
+            
+            # IF WE FOUND TOO MANY
+            if isinstance(text, list):
+                print("Found too many names! Splitting along longest sides")
+                try:
+                    shapely_contour = contours_to_shapely_polygons(contour)
+                    outpoly_1, outpoly_2 = splitPolygonByLongerSides(shapely_contour)
+                    
+                    outdict[text[0]] = convertShapelyToCV2(outpoly_1)
+                    outdict[text[1]] = convertShapelyToCV2(outpoly_2)
+                except:
+                    print("Failure! Results will be inaccurate due to line segment on Tile Boundary not being identified")
+                    continue
+                continue
+            outdict[text] = contour
+    
+    plt.clf()
+    
+    return outdict
+
+def FindGrid_OLD(classifications, effectiveArea, key, image_path, verbose=True):
 
     # Get largest section of mask image
     image_or = cv2.imread(image_path)

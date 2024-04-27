@@ -114,26 +114,3 @@ class affineTransformation:
         temp_out = temp_out.T + np.array([self.x_translation, self.y_translation])
         # RETURN VALUES
         return temp_out[:, 0], temp_out[:, 1]
-    
-def plotResiduals(model, x_c, y_c, x_f, y_f, ax=False, plotscale = 0.1, title=""):
-    
-    if isinstance(ax, bool):
-        fig, ax = plt.subplots()
-    
-    x_f_cap, y_f_cap = model.transform(x_c, y_c)
-
-    res_x = (x_f_cap - x_f).astype(np.float64)
-    res_y = (y_f_cap - y_f).astype(np.float64)
-    
-    rmse_x = np.sqrt(np.sum(res_x**2)/res_x.shape[0])
-    rmse_y = np.sqrt(np.sum(res_y**2)/res_y.shape[0])
-
-    ax.quiver(x_f, y_f, res_x, res_y, scale=plotscale)
-    ax.set_xlabel("X (mm)")
-    ax.set_xlim((-150, 150))
-    ax.set_ylim((-150, 150))
-    ax.set_ylabel("Y (mm)")
-    ax.set_title(title)
-    ax.set_title(f"Residual Plot (Scale = {1 / plotscale})\nx RMSE: {rmse_x:.3e}\ny RMSE: {rmse_y:.3e}")
-
-    return res_x, res_y, ax
