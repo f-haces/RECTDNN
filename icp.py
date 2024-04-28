@@ -1,4 +1,5 @@
 import numpy as np
+from affinetransformation import *
 from sklearn.neighbors import NearestNeighbors
 
 
@@ -63,20 +64,72 @@ def nearest_neighbor(src, dst):
     distances, indices = neigh.kneighbors(src, return_distance=True)
     return distances.ravel(), indices.ravel()
 
-def plotICP(reprojected_points, plot_skip=2, ):
+def plotICP(reprojected_points, initial_points, plot_skip=2, best=None):
     icp_iterations = len(reprojected_points)
     fig, ax = plt.subplots()
-    colormap = plt.get_cmap('RdYlGn') 
+    colormap = plt.get_cmap('cool') 
 
-    ax.scatter(coords_shp_proc_bl[:, 0], coords_shp_proc_bl[:, 1], color=colormap(0), s=0.5)
-    ax.scatter(coords_ras_proc_bl[:, 0], coords_ras_proc_bl[:, 1], color="black", s=0.5)
+    ax.scatter(initial_points['shp'][:, 0], initial_points['shp'][:, 1], color=colormap(0), s=1, label="Initial")
+    ax.scatter(initial_points['ras'][:, 0], initial_points['ras'][:, 1], color="black", s=1)
 
     for i in np.arange(plot_skip, icp_iterations, plot_skip):
-        ax.scatter(reprojected_points[i][:, 0], reprojected_points[i][:, 1], color=colormap(i / icp_iterations), s=0.1)
+        ax.scatter(reprojected_points[i][:, 0], reprojected_points[i][:, 1], 
+            color=colormap(i / icp_iterations), s=0.3, label=f"Iteration {i}")
+
+    if best is not None:
+        ax.scatter(best[:, 0], best[:, 1], color='red', s=1, marker='x', label="Best Fit")
         
+    ax.legend()
     ax.grid()
     ax.axis("equal")
     return ax
+
+def adjustStep_cv2(from_points, coords_ras, kdtree, shear=True, rotation = True, perspective=True):
+    
+    # CALCULATE NEAREST POINTS AND FIND HOMOGRAPHY
+    _, nearest_indices = kdtree.query(from_points)
+    to_points = np.array([coords_ras[idx] for idx in nearest_indices])
+    new_homography, _ = cv2.findHomography(from_points, to_points, cv2.RANSAC, 1000000)
+    if not shear:
+        scale  = np.sqrt((new_homography[0, 0] ** 2 + new_homography[1, 1] ** 2) / 2)
+        new_homography[0, 0] = scale 
+        new_homography[1, 1] = scale
+    if not perspective:
+        new_homography[2, 0] = 0 
+        new_homography[2, 1] = 0 
+    if not rotation:
+        new_homography[0, 1] = 0 
+        new_homography[1, 0] = 0 
+    
+    return new_homography
+
+def adjustStep_affine(from_points, coords_ras, kdtree, 
+                      shear=True, rotation = True, perspective=True):
+    
+    # TODO: IMPLEMENT SIMILARITY AND PERSPECTIVE TRANSFORMATIONS WHEN APPROPRIATE
+
+    # CALCULATE NEAREST POINTS AND FIND HOMOGRAPHY
+    _, nearest_indices = kdtree.query(from_points)
+    to_points = np.array([coords_ras[idx] for idx in nearest_indices])
+    affine = affineTransformation(from_points[:, 0], from_points[:, 1], 
+                                             to_points[:, 0], to_points[:, 1],
+                                             verbose=False
+                                 )
+    
+    new_homography = affine.matrix
+    
+    if not shear:
+        scale  = np.sqrt((new_homography[0, 0] ** 2 + new_homography[1, 1] ** 2) / 2)
+        new_homography[0, 0] = scale 
+        new_homography[1, 1] = scale
+    if not perspective:
+        new_homography[2, 0] = 0 
+        new_homography[2, 1] = 0 
+    if not rotation:
+        new_homography[0, 1] = 0 
+        new_homography[1, 0] = 0 
+    
+    return new_homography
 
 def icp(A, B, init_pose=None, max_iterations=20, tolerance=0.001):
     '''

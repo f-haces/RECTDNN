@@ -108,51 +108,6 @@ def applyTransform(transform, arry):
     final_points = final_points[:2, :].T
     return final_points
 
-def adjustStep_cv2(from_points, coords_ras, kdtree, shear=True, rotation = True, perspective=True):
-    
-    # CALCULATE NEAREST POINTS AND FIND HOMOGRAPHY
-    _, nearest_indices = kdtree.query(from_points)
-    to_points = np.array([coords_ras[idx] for idx in nearest_indices])
-    new_homography, _ = cv2.findHomography(from_points, to_points, cv2.RANSAC, 1000000)
-    if not shear:
-        scale  = np.sqrt((new_homography[0, 0] ** 2 + new_homography[1, 1] ** 2) / 2)
-        new_homography[0, 0] = scale 
-        new_homography[1, 1] = scale
-    if not perspective:
-        new_homography[2, 0] = 0 
-        new_homography[2, 1] = 0 
-    if not rotation:
-        new_homography[0, 1] = 0 
-        new_homography[1, 0] = 0 
-    
-    return new_homography
-
-def adjustStep_affine(from_points, coords_ras, kdtree, 
-                      shear=True, rotation = True, perspective=True):
-    
-    # CALCULATE NEAREST POINTS AND FIND HOMOGRAPHY
-    _, nearest_indices = kdtree.query(from_points)
-    to_points = np.array([coords_ras[idx] for idx in nearest_indices])
-    affine = affineTransformation(from_points[:, 0], from_points[:, 1], 
-                                             to_points[:, 0], to_points[:, 1],
-                                             verbose=False
-                                 )
-    
-    new_homography = affine.matrix
-    
-    if not shear:
-        scale  = np.sqrt((new_homography[0, 0] ** 2 + new_homography[1, 1] ** 2) / 2)
-        new_homography[0, 0] = scale 
-        new_homography[1, 1] = scale
-    if not perspective:
-        new_homography[2, 0] = 0 
-        new_homography[2, 1] = 0 
-    if not rotation:
-        new_homography[0, 1] = 0 
-        new_homography[1, 0] = 0 
-    
-    return new_homography
-
 def find_bbox(binary_image):
     """
     Finds the bounding box coordinates of the foreground object in a binary image.

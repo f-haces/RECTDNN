@@ -31,7 +31,7 @@ def split_and_run_cnn(image_path, model, tilesize=1024, overhang_size=2):
     output_gen = np.zeros((width, height, num_classes))
     
     # Iterate over each tile
-    for tile_x in tqdm(range(num_tiles_x)):
+    for tile_x in range(num_tiles_x):
         for tile_y in range(num_tiles_y):
                         
             # Calculate the coordinates for the current tile
