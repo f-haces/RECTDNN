@@ -1,29 +1,22 @@
 # NOTEBOOK IMPORTS
-import os, glob, zipfile, warnings
+import os, glob, warnings
 import numpy as np
 from tqdm.notebook import tqdm
-from shutil import copyfile, rmtree
-from datetime import datetime
 
 # IMAGE IMPORTS
 import cv2
 from PIL import Image
 
 # GIS IMPORTS
-import fiona, pyproj
-from affine import Affine
-from shapely.geometry import shape, mapping, Point, LineString, MultiPolygon, Polygon
-from shapely.ops import transform, nearest_points, snap
+import pyproj
+from shapely.geometry import MultiPolygon
+from shapely.ops import transform
 import pandas as pd
 import geopandas as gpd
-import rasterio as rio
-from rasterio.mask import mask
 from scipy.spatial import cKDTree
 
 # PLOTTING IMPORTS
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-import matplotlib.lines as lines
 
 # CUSTOM UTILITIES
 from WorldFileUtils import *
@@ -452,9 +445,197 @@ def find_bbox_yolo(mydict : dict) -> np.array:
 
     mylist = []
     for i, (k, v) in enumerate(mydict.items()):
-        # print(k, v)
         mylist.append(v["bbox"])
 
     mylist = np.array(mylist)
 
     return np.array([np.min(mylist[:, 0]), np.min(mylist[:, 1]), np.max(mylist[:, 2]), np.max(mylist[:, 3])])
+
+def boundsToCV2Rect(bounds):
+    '''
+    Find the nearest (Euclidean) neighbor in dst for each point in src
+    Input:
+        bounds: np.array in format [x_min, y_min, x_max, y_max]
+        dst: Nxm array of points
+    Output:
+        rect: np.array in format [c1, c2, c3, c4], where c is an x, y coordinate
+    '''
+    out = np.array([[bounds[0], bounds[1]], 
+                   [bounds[0], bounds[3]],
+                   [bounds[2], bounds[1]],
+                   [bounds[2], bounds[3]]])
+    return out
+
+def translation_matrix(x, y, z=1):
+    '''
+    Find the translation matrix from a given x and y offseets
+    Input:
+        x: (float)
+        y: (float)
+    Output:
+        matrix: np.array representing translation matrix
+    '''
+    matrix = np.array([[1, 0, x],
+                        [0, 1, y],
+                        [0, 0, z]])
+    return matrix
+
+def gradeFit(pts1, kdtree):
+    '''
+    Predict fit between ICP
+    Input:
+        x: (float)
+        y: (float)
+    Output:
+        matrix: np.array representing translation matrix
+    '''
+    dist, _ = kdtree.query(pts1)
+    return np.sqrt(np.sum(dist ** 2))
+
+def performICPonIndex(boundaries, dnn_outputs,
+               debug=False, plot=True, icp_iterations=30):
+    '''
+    ICP
+    Input:
+        image_arry (np.array): Image
+        bounds_panels: 
+        shp_bounds:
+        output_image_fn:
+        dnn_outputs:
+    Output:
+        distances: Euclidean distances of the nearest neighbor
+        indices: dst indices of the nearest neighbor
+    '''
+
+    # INITIAL APPROXIMATE TRANSFORM BASED ON BOUNDS - FROM AND TO POINT DEFINITIONS BASED ON INPUTS
+    from_points = boundsToCV2Rect(boundaries["bounds_panels"])
+    to_points   = boundsToCV2Rect(boundaries["shp_bounds"])
+
+    # CALCULATE INITIAL TRANSFORM FROM BOUNDS
+    initial_transform = cv2.findHomography(from_points, to_points, cv2.RANSAC, 1000)
+    original_homography = initial_transform[0]
+    inverse_transform = np.linalg.inv(original_homography)
+
+    # CONVERT THINNED IMAGE TO POINTS
+    thin_image = getCountyBoundaryFromImage(dnn_outputs["countyArea"])
+    y, x = np.where(thin_image[::-1, :])                   # GET COORDINATES OF EVERY 
+    image_points = np.vstack((x, y, np.ones(x.shape)))     # STACK X, Y, AND Z COORDINATES
+    
+    # TRANSFORM SHAPEFILE POINTS INTO IMAGE COORDINATE SYSTEM
+    point_geometry = [[point.geometry.x, point.geometry.y, 1] for i, point in boundaries["point_boundary_gdf"].iterrows()]
+    point_geometry = inverse_transform @ np.array(point_geometry).T
+    
+    # COORDINATE HANDLING
+    coords_shp = point_geometry.T
+    coords_ras = np.vstack((image_points[0, :], image_points[1, :], np.ones(image_points[1, :].shape))).T
+    
+    # IMAGE ORIGIN COORDINATE SYSTEM TO IMAGE CENTER COORDINATE SYSTEM
+    offsets = np.min(coords_ras, axis=0)
+    x_offset, y_offset = offsets[0], offsets[1]
+    coords_shp_proc_bl = np.vstack((coords_shp[:, 0] - x_offset, coords_shp[:, 1] - y_offset)).T
+    coords_ras_proc_bl = np.vstack((coords_ras[:, 0] - x_offset, coords_ras[:, 1] - y_offset)).T
+    initial_points = {"shp" : coords_shp_proc_bl, "ras" : coords_ras_proc_bl}
+    
+    if debug:
+        plt.scatter(coords_shp_proc_bl[:, 0], coords_shp_proc_bl[:, 1])
+        plt.scatter(coords_ras_proc_bl[:, 0], coords_ras_proc_bl[:, 1])
+        plt.show()
+    
+    # FAST SEARCH STRUCTURE
+    kdtree     = cKDTree(coords_ras_proc_bl)
+    
+    # ITERATIVE CLOSEST POINT
+    reprojected_points = []
+    compounded_homography = np.eye(3)
+    proc_points = coords_shp_proc_bl
+    
+    # TRANSFORMATION PARAMS
+    rotation, shear, perspective = True, False, False
+
+    # OUTPUT STRUCTURES
+    transforms, grades = [], []
+
+    # ITERATE
+    for i in tqdm(range(icp_iterations), disable=True):
+        
+        _, nearest_indices = kdtree.query(proc_points)
+        to_points = np.array([coords_ras_proc_bl[idx] for idx in nearest_indices])
+        
+        # TAKE ADJUSTMENT STEP
+        new_homography = adjustStep_affine(proc_points, coords_ras_proc_bl, kdtree,
+                                        shear=shear, rotation=rotation, perspective=perspective)
+        
+        if debug:
+            fig, ax = plt.subplots()
+            ax.scatter(proc_points[:, 0], proc_points[:, 1])
+            ax.scatter(coords_ras_proc_bl[:, 0], coords_ras_proc_bl[:, 1])
+            ax.scatter(to_points[:, 0], to_points[:, 1])
+
+            for i in range(proc_points.shape[0]):
+                plt.plot([proc_points[i, 0], to_points[i, 0]],
+                         [proc_points[i, 1], to_points[i, 1]], 'ko', linestyle="--")
+            plt.show()
+        
+        transform = new_homography.copy()
+        
+        # APPLY TRANSFORM FROM ADJUSTMENT TO PROCESSING POINTS AND APPEND TO LIST
+        reprojected_points.append(applyTransform(transform, proc_points))
+
+        proc_points = applyTransform(transform, proc_points)
+        if debug:
+            plt.scatter(proc_points[:, 0], proc_points[:, 1])
+            plt.scatter(coords_ras_proc_bl[:, 0], coords_ras_proc_bl[:, 1])
+            plt.scatter(to_points[:, 0], to_points[:, 1])
+            plt.show()
+            
+        # COMPOUND TRANSFORMATION
+        compounded_homography = compounded_homography @ transform
+        
+        transforms.append(compounded_homography)
+        
+        grades.append(gradeFit(proc_points, kdtree))
+        
+        
+        if i % 1 == 0:
+            scale  = np.sqrt((new_homography[0, 0] ** 2 + new_homography[1, 1] ** 2) / 2)
+            offset = np.sqrt((new_homography[1, 2] ** 2 + new_homography[0, 2] ** 2) / 2)
+            # print(f"Scale: {scale:.2f} Offset: {offset:.2f}")
+    
+    best_transform = transforms[np.argmin(grades)]
+    best_points    = reprojected_points[np.argmin(grades)]
+    
+    if debug:
+        plt.plot(range(len(grades)), grades)
+        plt.scatter(np.argmin(grades), grades[np.argmin(grades)])
+        plt.show()
+
+    if plot:
+        plotICP(reprojected_points, initial_points, plot_skip=5, best=best_points)
+        plt.show()
+    
+    transform_dict = {
+        "initial" : original_homography,
+        "best"    : best_transform 
+    }
+
+    return transform_dict
+
+def ICPtoCRSTransform(image_arry, transform_dict):
+    # REVERSE Y AXIS
+    rev_y_axis = np.array([[1, 0, 0],
+                        [0,-1, 0],
+                        [0, 0, 1]])
+
+    # move = original_homography @ np.array([0, image_t.shape[0], 0])
+    translation = np.eye(3)
+    translation[1, 2] = image_arry.shape[0]
+    
+    adjustment =  np.linalg.inv(transform_dict['best'].copy())
+    rev_adj = adjustment.copy()
+    rev_adj[1, 1] = rev_adj[1, 1] * -1
+    
+    output_transform = transform_dict['initial'] @ translation @ rev_adj
+    offsets = output_transform @ np.array([[0, 0, 1], [image_arry.shape[0], 0, 1]]).T
+    offsets = offsets[:, 1] - offsets[:, 0]
+
+    return output_transform, offsets

@@ -132,6 +132,7 @@ def adjustStep_affine(from_points, coords_ras, kdtree,
     return new_homography
 
 def icp(A, B, init_pose=None, max_iterations=20, tolerance=0.001):
+
     '''
     The Iterative Closest Point method: finds best-fit transform that maps points A on to points B
     Input:
