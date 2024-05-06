@@ -38,6 +38,9 @@ def initialize():
     if os.getlogin() == 'fhacesga':
         t_path   = r'C:\Users\fhacesga\AppData\Local\Programs\Tesseract-OCR\tesseract.exe'
         data_dir = r"C:\Users\fhacesga\OneDrive - University Of Houston\AAA_RECTDNN\data/"
+    elif os.getlogin() == 'fhace':
+        t_path   = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+        data_dir = r"C:\Users\fhace\OneDrive - University Of Houston\AAA_RECTDNN\data/"
     else:
         t_path   = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
         data_dir = r"C:\Users\franc\OneDrive - University Of Houston\AAA_RECTDNN\data/"

@@ -268,7 +268,7 @@ def findTiles(image_fn, model=None,
 
     # GOTTA FIND CORRECT FILE BC RESIZED WERE SAVED WITH PNG EXTENSION
     basen = os.path.basename(results[0].path)[:-4]
-    in_fn = glob.glob(os.path.join(input_folder,  basen + '*'))[0]
+    in_fn = glob.glob(os.path.join(input_folder,  basen + '*[!w]'))[0]
     key = findKey(basen)
 
     image = Image.open(in_fn)
@@ -291,6 +291,9 @@ def findTiles(image_fn, model=None,
         # GET ID FROM TILE
         text = pytesseract.image_to_string(data, config='--psm 12 --oem 3') # -c tessedit_char_whitelist=0123456789
         word = find_word_with_key(text, key, threshold=80, verbose=False)
+
+        if isinstance(word, list):
+            word = ",".join(word)
 
         outputs[word] = {"bbox" : bbox, "data" : data} # (bbox, data)
 
@@ -639,3 +642,19 @@ def ICPtoCRSTransform(image_arry, transform_dict):
     offsets = offsets[:, 1] - offsets[:, 0]
 
     return output_transform, offsets
+
+def getBBOX_coords(tile_ds : rio.DatasetReader, bbox : list) -> list:
+    """
+    Converts Bounding Box pixel coordinates into actual coordinates by using the input rasterio dataset
+
+    Parameters:
+        tile_ds (rasterio.Dataset): Post-ICP rasterio dataset saved with a world file.
+        bbox (iterable): Bounding box coordinates in format (x_min, y_min, x_max, y_max),
+                      normalized by the total image width and height.
+
+    Returns:
+        coords (list): list of raster coordinates in (x_min, y_min, x_max, y_max) format.
+    """
+    x1, y1 = rio.transform.xy(tile_ds.transform, bbox[0], bbox[1]) 
+    x2, y2 = rio.transform.xy(tile_ds.transform, bbox[2], bbox[3])
+    return [x1, y1, x2, y2]
