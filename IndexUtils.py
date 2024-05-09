@@ -496,7 +496,9 @@ def gradeFit(pts1, kdtree):
     return np.sqrt(np.sum(dist ** 2))
 
 def performICPonIndex(boundaries, dnn_outputs,
-               debug=False, plot=True, icp_iterations=30):
+               debug=False, plot=True, icp_iterations=30,
+               rotation=True, shear=False, perspective=False,
+               ):
     '''
     ICP
     Input:
@@ -553,7 +555,7 @@ def performICPonIndex(boundaries, dnn_outputs,
     proc_points = coords_shp_proc_bl
     
     # TRANSFORMATION PARAMS
-    rotation, shear, perspective = True, False, False
+    # rotation, shear, perspective = True, False, False
 
     # OUTPUT STRUCTURES
     transforms, grades = [], []
@@ -622,39 +624,3 @@ def performICPonIndex(boundaries, dnn_outputs,
     }
 
     return transform_dict
-
-def ICPtoCRSTransform(image_arry, transform_dict):
-    # REVERSE Y AXIS
-    rev_y_axis = np.array([[1, 0, 0],
-                        [0,-1, 0],
-                        [0, 0, 1]])
-
-    # move = original_homography @ np.array([0, image_t.shape[0], 0])
-    translation = np.eye(3)
-    translation[1, 2] = image_arry.shape[0]
-    
-    adjustment =  np.linalg.inv(transform_dict['best'].copy())
-    rev_adj = adjustment.copy()
-    rev_adj[1, 1] = rev_adj[1, 1] * -1
-    
-    output_transform = transform_dict['initial'] @ translation @ rev_adj
-    offsets = output_transform @ np.array([[0, 0, 1], [image_arry.shape[0], 0, 1]]).T
-    offsets = offsets[:, 1] - offsets[:, 0]
-
-    return output_transform, offsets
-
-def getBBOX_coords(tile_ds : rio.DatasetReader, bbox : list) -> list:
-    """
-    Converts Bounding Box pixel coordinates into actual coordinates by using the input rasterio dataset
-
-    Parameters:
-        tile_ds (rasterio.Dataset): Post-ICP rasterio dataset saved with a world file.
-        bbox (iterable): Bounding box coordinates in format (x_min, y_min, x_max, y_max),
-                      normalized by the total image width and height.
-
-    Returns:
-        coords (list): list of raster coordinates in (x_min, y_min, x_max, y_max) format.
-    """
-    x1, y1 = rio.transform.xy(tile_ds.transform, bbox[0], bbox[1]) 
-    x2, y2 = rio.transform.xy(tile_ds.transform, bbox[2], bbox[3])
-    return [x1, y1, x2, y2]
