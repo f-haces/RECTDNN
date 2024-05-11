@@ -51,6 +51,7 @@ def init_databases(ref_dir):
 
     counties["GEOID"] = counties["GEOID"].astype(np.int32)
     places["GEOID"]   = places["GEOID"].astype(np.int32)
+    return True
 
 def getGEOID(CID,):
     global CIDs
@@ -624,3 +625,23 @@ def performICPonIndex(boundaries, dnn_outputs,
     }
 
     return transform_dict
+
+def ICPtoCRSTransform(image_arry, transform_dict):
+    # REVERSE Y AXIS
+    rev_y_axis = np.array([[1, 0, 0],
+                        [0,-1, 0],
+                        [0, 0, 1]])
+
+    # move = original_homography @ np.array([0, image_t.shape[0], 0])
+    translation = np.eye(3)
+    translation[1, 2] = image_arry.shape[0]
+    
+    adjustment =  np.linalg.inv(transform_dict['best'].copy())
+    rev_adj = adjustment.copy()
+    rev_adj[1, 1] = rev_adj[1, 1] * -1
+    
+    output_transform = transform_dict['initial'] @ translation @ rev_adj
+    offsets = output_transform @ np.array([[0, 0, 1], [image_arry.shape[0], 0, 1]]).T
+    offsets = offsets[:, 1] - offsets[:, 0]
+
+    return output_transform, offsets
