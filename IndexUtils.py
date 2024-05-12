@@ -621,27 +621,9 @@ def performICPonIndex(boundaries, dnn_outputs,
     
     transform_dict = {
         "initial" : original_homography,
-        "best"    : best_transform 
+        "best"    : best_transform,
+        "list"    : transforms,
+        "grades"  : grades
     }
 
     return transform_dict
-
-def ICPtoCRSTransform(image_arry, transform_dict):
-    # REVERSE Y AXIS
-    rev_y_axis = np.array([[1, 0, 0],
-                        [0,-1, 0],
-                        [0, 0, 1]])
-
-    # move = original_homography @ np.array([0, image_t.shape[0], 0])
-    translation = np.eye(3)
-    translation[1, 2] = image_arry.shape[0]
-    
-    adjustment =  np.linalg.inv(transform_dict['best'].copy())
-    rev_adj = adjustment.copy()
-    rev_adj[1, 1] = rev_adj[1, 1] * -1
-    
-    output_transform = transform_dict['initial'] @ translation @ rev_adj
-    offsets = output_transform @ np.array([[0, 0, 1], [image_arry.shape[0], 0, 1]]).T
-    offsets = offsets[:, 1] - offsets[:, 0]
-
-    return output_transform, offsets

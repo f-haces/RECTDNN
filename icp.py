@@ -111,12 +111,18 @@ def adjustStep_affine(from_points, coords_ras, kdtree,
     # CALCULATE NEAREST POINTS AND FIND HOMOGRAPHY
     _, nearest_indices = kdtree.query(from_points)
     to_points = np.array([coords_ras[idx] for idx in nearest_indices])
-    affine = affineTransformation(from_points[:, 0], from_points[:, 1], 
+
+    if shear:
+        transform = affineTransformation(from_points[:, 0], from_points[:, 1], 
                                              to_points[:, 0], to_points[:, 1],
                                              verbose=False
                                  )
+    else:
+        transform = similarityTransformation(from_points[:, 0], from_points[:, 1], 
+                                             to_points[:, 0], to_points[:, 1],
+                                             verbose=False)
     
-    new_homography = affine.matrix
+    new_homography = transform.matrix
     
     if not shear:
         scale  = np.sqrt((new_homography[0, 0] ** 2 + new_homography[1, 1] ** 2) / 2)

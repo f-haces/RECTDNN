@@ -176,6 +176,11 @@ class similarityTransformation:
         self.scale = np.sqrt(self.a ** 2 + self.b ** 2)
         self.rotation = np.arctan(self.b / self.a)
         
+        self.matrix = np.array([
+            [self.a, -1 * self.b, self.x_translation], 
+            [self.b, self.a, self.y_translation],
+            [     0,      0,                  1]])
+
         self.currdict = {
             "a" : self.a,
             "b" : self.b,
