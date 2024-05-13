@@ -234,23 +234,24 @@ def extract_bounded_area(image, bbox):
     return cropped_image
 
 def findTiles(image_fn, model=None, 
-        model_weights=f"{data_dir}BBNN/curr_weights.pt",
+        model_weights=f"{data_dir}BBNN/weights042924.pt",
         creation_params=None,
+        save_dir=None,
         device="cpu",
         ):
         
     input_folder = os.path.dirname(os.path.abspath(image_fn))
 
     if creation_params is None:
-        target_size = 1024
+        target_size = 1920
         original_shapes = []
 
         # COCO DATASET PARAMS
         category_labels = {
-            0 : "County",
-            1 : "Tile",
-            2 : "Box",
-            3 : "Legend"
+            0 : "Tile",
+            1 : "County",
+            2 : "Legend",
+            3 : "Box"
         }
 
         categories=[0, 1]
@@ -280,7 +281,7 @@ def findTiles(image_fn, model=None,
     outputs = {}
 
     # FOR TILES
-    slice = np.logical_and(classes==0, conf > 0.92)
+    slice = np.logical_and(classes==1, conf > 0.92)
     for i in np.where(slice)[0]: 
         
         # GET TILE DATA
@@ -300,11 +301,14 @@ def findTiles(image_fn, model=None,
 
     # FOR COUNTY - GET MOST LIKELY BOX CLASSIFIED AS COUNTY
     county_conf = conf.copy()
-    county_conf[classes != 1] = 0
+    county_conf[classes != 2] = 0
     slice = np.argmax(county_conf)
 
     bbox = results[0].boxes.xyxyn.numpy()[slice]
     outputs["county"] = {"bbox" : bbox * im_size_arry, "data" : extract_bounded_area(image, bbox)}
+
+    if save_dir is not None:
+        results[0].save(save_dir)
 
     return outputs, model
 
