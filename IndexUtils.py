@@ -297,7 +297,7 @@ def findTiles(image_fn, model=None,
         if isinstance(word, list):
             word = ",".join(word)
 
-        outputs[word] = {"bbox" : bbox, "data" : data} # (bbox, data)
+        outputs[word] = {"bbox" : bbox, "data" : data, "text" : text} # (bbox, data)
 
     # FOR COUNTY - GET MOST LIKELY BOX CLASSIFIED AS COUNTY
     county_conf = conf.copy()
@@ -405,7 +405,8 @@ def findKeypoints(image, model=None, num_classes=5, num_pyramids=3,
             "dims_rep"   : None,
             "n_pyramids" : num_pyramids,
             "num_dim"    : num_classes,
-            "device"     : device
+            "device"     : device,
+            "verbose"    : False
         }
     
     if cnn_creation_params is None:

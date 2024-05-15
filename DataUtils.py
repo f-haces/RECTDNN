@@ -502,7 +502,7 @@ def get_pyramid(image, j, i, pyramid_depth, pyramid_size, plot=False):
     return pyramid
 
 def split_and_run_cnn(image, model, tilesize=2048, 
-    num_dim=3, edges=3, dims_rep=None, n_pyramids=3, device="cuda"):
+    num_dim=3, edges=3, dims_rep=None, n_pyramids=3, device="cuda", verbose=True):
 
     if dims_rep is None:
         dims_rep=np.arange(num_dim)
@@ -524,7 +524,7 @@ def split_and_run_cnn(image, model, tilesize=2048,
     output_gen = np.zeros((width, height, model.num_classes))
     
     # FOR EACH TILE
-    for tile_x in tqdm(range(num_tiles_x)):
+    for tile_x in tqdm(range(num_tiles_x), disable=(not verbose)):
         for tile_y in range(num_tiles_y):
                         
             # COORDINATES OF CURRENT TILE
