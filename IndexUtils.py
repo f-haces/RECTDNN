@@ -264,6 +264,10 @@ def findTiles(image_fn, model=None,
     
     results = model(image_fn, imgsz=target_size)
 
+    if device is "cuda":
+        results = results.detach().cpu()
+        model   = model.to("cpu")
+
     # GET CLASSES AND CONFIDENCES OF EACH RESULT
     classes = results[0].boxes.data.numpy()[:, -1]
     conf    = results[0].boxes.data.numpy()[:, -2]
