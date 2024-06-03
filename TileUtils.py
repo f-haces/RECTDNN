@@ -12,7 +12,7 @@ from PIL import Image
 from affine import Affine
 import pandas as pd
 import geopandas as gpd
-from shapely.geometry import Polygon, LineString, Point, MultiPoint
+from shapely.geometry import Polygon, LineString, Point, MultiPoint, box
 
 # PLOTTING IMPORTS
 import matplotlib.pyplot as plt
@@ -143,4 +143,15 @@ def findBounds(image_fn, model=None,
     
     results = model(image_fn, imgsz=target_size, verbose=verbose)
 
+    if device == "cuda":
+        results = [result.cpu() for result in results]
+        model   = model.to("cpu")
+
     return results, model
+
+def bbox_to_polygon(bbox):
+    # Function to convert [left, bottom, right, top] to a shapely Polygon
+    if len(bbox) == 0:
+        return None
+    left, bottom, right, top = bbox
+    return box(left, bottom, right, top)

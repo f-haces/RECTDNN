@@ -636,3 +636,231 @@ def performICPonIndex(boundaries, dnn_outputs,
     }
 
     return transform_dict
+
+def runYOLO_Text(image_fn, model=None, 
+        model_weights=f"{data_dir}BBNN/weights042924.pt",
+        save_dir=None,
+        device="cuda",
+        verbose=True,
+        find_text = True,
+        keyed_text = False,
+        target_size = 1920,
+        conf_threshold = 0.92
+        ):
+    
+    
+    input_folder = os.path.dirname(os.path.abspath(image_fn))
+
+    # INITIALIZE MODEL AS NEEDED
+    if model is None:
+        model = ultralytics.YOLO(model_weights).to("cpu")
+    model = model.to(device)
+    
+    # RUN MODEL
+    results = model(image_fn, imgsz=target_size, verbose=verbose)
+
+    if device == "cuda":
+        results = [result.cpu() for result in results]
+        model   = model.to("cpu")
+
+    # FIND KEY FOR FILE
+    basen = os.path.basename(results[0].path)[:-4]
+    key = findKey(basen)
+
+    # GOTTA FIND CORRECT FILE BC RESIZED WERE SAVED WITH PNG EXTENSION
+    in_fn = glob.glob(os.path.join(input_folder,  basen + '*[!w]'))[0]
+    image = Image.open(in_fn)
+    width, height = image.size
+    im_size_arry  = np.array([width, height, width, height])
+
+    # OUTPUT STRUCTURE
+    outputs = {}
+    
+    # YOLO CONFIDENCE
+    conf = results[0].boxes.data.numpy()[:, -2] # GET CONFIDENCE LEVELS
+    slice = conf > conf_threshold               # SLICE CONFIDENCE LEVELS WITH THRESHOLDS
+
+    # FOR EACH RESULT 
+    for i in range(results[0].boxes.xyxyn.numpy().shape[0]): # np.where(slice)[0]: 
+        
+        # GET BBOX DATA
+        bbox = results[0].boxes.xyxyn.numpy()[i]
+        data = extract_bounded_area(image, bbox)
+
+        bbox = bbox * im_size_arry
+
+        # FIND TE
+        if find_text:
+            text = pytesseract.image_to_string(data, config='--psm 12 --oem 3') # -c tessedit_char_whitelist=0123456789
+
+            if keyed_text:
+                word = find_word_with_key(text, key, threshold=80, verbose=False)
+
+                if isinstance(word, list):
+                    word = ",".join(word)
+            else:
+                word = None
+        else:
+            text, word = None, None
+
+        outputs[i] = {"bbox" : bbox, "data" : data, "text" : text, "keyed_text" : word, "confidence" : conf[i]}
+
+    if save_dir is not None:
+        results[0].save(save_dir)
+
+    return outputs, model
+
+def saveTiles(tiles, output_image_fn):
+    # DO NOT USE, IS WRONG
+    src = rio.open(output_image_fn)
+    for iii, (k, v) in enumerate(tiles.items()):
+        if k in ['transform_info', 'output_transform']:
+            continue
+
+        tiles[k]['coords'] = getBBOX_coords(src, tiles[k]['bbox'])
+        saveTile(os.path.join(outputs_dir, f"{filename}_{k}.tif"), v, baseaffine=output_transform)
+
+        try:
+            if k in ['transform_info', 'output_transform']:
+                continue
+            tiles[k]['coords'] = getBBOX_coords(src, tiles[k]['bbox'])
+            saveTile(os.path.join(outputs_dir, f"{filename}_{k}.tif"), v, baseaffine=output_transform)
+        except Exception as e:
+            print("ERROR : "+str(e) + f" {k}")
+            continue
+
+
+def runTLNN(filename, TLNN=None):
+    if TLNN is None:
+        TLNN = {
+            "tile"      : {"model" : None, "keyed_text" : True,  "model_weights" : f"{data_dir}BBNN/TileBBNN.pt"}, 
+            "county"    : {"model" : None, "keyed_text" : False, "model_weights" : f"{data_dir}BBNN/CountyBBNN.pt"}, 
+            "legend"    : {"model" : None, "keyed_text" : False, "model_weights" : f"{data_dir}BBNN/LegendBBNN.pt"}}
+        
+    outputs = {}
+
+    # FOR EACH YOLO NN
+    for i, (k,v) in enumerate(TLNN.items()):
+        
+        # OUTPUT FILE
+        save_dir = os.path.join(outputs_dir, os.path.basename(filename).split(".")[0] + f"_{k}BBNN.tif")
+        
+        results, model = runYOLO_Text(filename, save_dir=None, **v)
+        outputs[k] = results
+        
+        # UPDATE WITH MODEL 
+        v['model'] = model
+        TLNN[k]  = v
+
+    return outputs, TLNN
+
+def getBBOX_coords(tile_ds : rio.DatasetReader, bbox : list) -> list:
+    """
+    Converts Bounding Box pixel coordinates into actual coordinates by using the input rasterio dataset
+
+    Parameters:
+        tile_ds (rasterio.Dataset): Post-ICP rasterio dataset saved with a world file.
+        bbox (iterable): Bounding box coordinates in format (x_min, y_min, x_max, y_max),
+                      normalized by the total image width and height.
+
+    Returns:
+        coords (list): list of raster coordinates in (x_min, y_min, x_max, y_max) format.
+    """
+    # x1, y1 = rio.transform.xy(tile_ds.transform, bbox[0], bbox[1]) WRONG X, Y 
+    # x2, y2 = rio.transform.xy(tile_ds.transform, bbox[2], bbox[3]) WRONG X, Y
+    x1, y1 = rio.transform.xy(tile_ds.transform, bbox[1], bbox[0]) 
+    x2, y2 = rio.transform.xy(tile_ds.transform, bbox[3], bbox[2])
+    return [x1, y1, x2, y2]
+
+def bbox_to_coords(bbox):
+    '''
+    x1, y1, x2, y2 = bbox
+
+    x_min = np.min([x1, x2])    
+    x_max = np.max([x1, x2])    
+    y_min = np.min([y1, y2])    
+    y_max = np.max([y1, y2])    
+
+    
+    '''
+    x_min, y_min, x_max, y_max = bbox
+
+    xs = [x_min, x_max, x_min, x_max]
+    ys = [y_min, y_min, y_max, y_max]
+    return xs, ys# [(x_min, y_min), (x_max, y_min), (x_max, y_max), (x_min, y_max)]
+
+# def getTileTransform(tile):
+
+def getTileAffine(tile, baseaffine=None):
+
+    b = baseaffine
+
+    w, h = tile['data'].size
+
+    x_i = [0, w, 0, w]
+    y_i = [0, 0, h, h]
+    x_c, y_c = bbox_to_coords(tile['coords'])
+
+    test = pd.DataFrame()
+    test["x_i"] = x_i
+    test["y_i"] = y_i
+    test["x_c"] = x_c
+    test["y_c"] = y_c
+
+    a = affineTransformation(x_i, y_i, x_c, y_c)
+
+    matrix = None
+    if b is not None: 
+        matrix = b.flatten()[:6]
+        matrix[2] = a.matrix.flatten()[2]
+        matrix[5] = a.matrix.flatten()[5]
+    else:
+        matrix = a.matrix.flatten()[:6]
+         
+
+    return rio.Affine(*matrix)
+
+def saveTile(fn, tile, baseaffine=None):
+    transform = tile['affine'] if 'affine' in tile else getTileAffine(tile, baseaffine=baseaffine)
+    image = np.asarray(tile['data']).astype(np.uint8)
+    epsg_code = 3857
+    with rio.open(fn, 'w',
+        driver='GTiff',
+        height=image.shape[0],
+        width=image.shape[1],
+        count=1,
+        dtype='uint8',
+        crs=f'EPSG:{epsg_code}',
+        transform=transform) as dst:
+            dst.write(image, 1)    
+
+def ICPtoCRSTransform(image_arry, transform_dict):
+    # REVERSE Y AXIS
+    rev_y_axis = np.array([[1, 0, 0],
+                        [0,-1, 0],
+                        [0, 0, 1]])
+
+    # move = original_homography @ np.array([0, image_t.shape[0], 0])
+    translation = np.eye(3)
+    translation[1, 2] = image_arry.shape[0]
+
+    transform_dict['translation'] = translation
+    
+    # adjustment =  np.linalg.inv(transform_dict['best'].copy())
+    # rev_adj = adjustment.copy()
+    # rev_adj[1, 1] = rev_adj[1, 1] * -1
+    transform_dict['rev_adj'] = np.linalg.inv(transform_dict['best'].copy())
+
+    transform_dict['flip'] = np.array([
+    [1, 0, 0],
+    [0, -1, 0],
+    [0, 0, 1]
+    ])
+    
+    # output_transform = transform_dict['initial'] @ transform_dict['translation'] @ transform_dict['rev_adj']
+    output_transform = transform_dict['initial'] @ transform_dict['rev_adj'] @ transform_dict['translation']  @ transform_dict['flip']
+    offsets = output_transform @ np.array([[0, 0, 1], [image_arry.shape[0], 0, 1]]).T
+    offsets = offsets[:, 1] - offsets[:, 0]
+    transform_dict['offsets'] = offsets
+
+    return output_transform, transform_dict
