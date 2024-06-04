@@ -642,10 +642,12 @@ def runYOLO_Text(image_fn, model=None,
         save_dir=None,
         device="cuda",
         verbose=True,
+        get_data = True,
         find_text = True,
         keyed_text = False,
         target_size = 1920,
-        conf_threshold = 0.92
+        conf_threshold = 0.92,
+        plot_params = {}
         ):
     
     
@@ -666,12 +668,26 @@ def runYOLO_Text(image_fn, model=None,
     # FIND KEY FOR FILE
     basen = os.path.basename(results[0].path)[:-4]
     key = findKey(basen)
-
+    
+    ''' UPDATE 06/04/24 WE ARE NO LONGER RESIZING BEFORE INFERENCE SO I'M REMOVING TO OPIMIZE
     # GOTTA FIND CORRECT FILE BC RESIZED WERE SAVED WITH PNG EXTENSION
     in_fn = glob.glob(os.path.join(input_folder,  basen + '*[!w]'))[0]
     image = Image.open(in_fn)
     width, height = image.size
     im_size_arry  = np.array([width, height, width, height])
+    '''
+    # LOAD IMAGE FROM RESULTS AND GET DIMENSIONS
+    # TODO: DOUBLE CHECK DIMENSION ORDER HERE
+    image = results[0].orig_img
+    if image.ndim == 3:
+        width, height, _ = image.shape
+    else:
+        width, height = image.shape
+    im_size_arry  = np.array([width, height, width, height])
+
+    # ONLY SPEND TIME TO CONVERT IMAGE IF WE ARE ACTUALLY USING IT TO EXTRACT DATA
+    if get_data:
+        image = Image.fromarray(image)
 
     # OUTPUT STRUCTURE
     outputs = {}
@@ -685,7 +701,11 @@ def runYOLO_Text(image_fn, model=None,
         
         # GET BBOX DATA
         bbox = results[0].boxes.xyxyn.numpy()[i]
-        data = extract_bounded_area(image, bbox)
+
+        if get_data:
+            data = extract_bounded_area(image, bbox)
+        else:
+            data = None
 
         bbox = bbox * im_size_arry
 
@@ -706,7 +726,7 @@ def runYOLO_Text(image_fn, model=None,
         outputs[i] = {"bbox" : bbox, "data" : data, "text" : text, "keyed_text" : word, "confidence" : conf[i]}
 
     if save_dir is not None:
-        results[0].save(save_dir)
+        results[0].save(save_dir, **plot_params)
 
     return outputs, model
 
