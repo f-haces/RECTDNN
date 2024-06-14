@@ -292,6 +292,352 @@ def findStreetCorners_colorPrep(image_fn, FANN=None, RLNN=None):
 
     return test, FANN, RLNN, bounds
 
+
+def buildDetectedDatabase(dict):
+    # BUILDS DETECTED TILE DATABASE BY READING YOLO RESULTS 
+    verbose = False
+    dupped_dict = {}
+    non_dupped_dict = {}
+    db = {}
+    possible_tiles = 0
+
+    # FOR EACH TILEINDEX
+    for fn in dict.keys():
+
+        # GET AFFINE TRANSFORM FROM CURRENT INDEX
+        affine   = Affine(*dict[fn]["output_transform"].flatten()[:6])
+
+        # LIST HOW MANY KEY DUPLICATES WE HAVE FOR EACH INDEX
+        db[findKey(fn)] = []
+        
+        # HOW MANY POSSIBLE TILES DO WE HAVE? ADD ALL FOUND TILES IN INDEX
+        possible_tiles = possible_tiles + len(dict[fn]['tile'].keys())
+
+
+        if verbose:
+            print('-' * 10 + fn + '-' * 10 + str(len(dict[fn]['tile'].keys())))
+
+        # FOR EACH TILE IN INDEX
+        for i in dict[fn]['tile'].keys():
+
+            # SPLIT NEW LINES AND FILTER THOSE WITH LESS THAN 3 NUMBERS
+            text_ori = dict[fn]['tile'][i]['text'].split("\n")
+            text = [a for a in text_ori if len("".join(re.findall("\d+", a))) > 3]
+
+            # FIND KEY BASED ON INDEX NAME
+            curr_key = findKey(fn)
+
+            # EXTRACT ONE OF THE LIST WITH KEY
+            data = process.extractOne(curr_key, text)
+            if data is None:
+                if verbose:
+                    print("NOT FOUND "+ " /n ".join(text_ori))
+                continue
+            found_text, score = data
+
+            # IF SCORE IS GOOD ENOUGH
+            if score > 60:
+
+                # FIND INDEX OF MATCHED TEXT IN LINES 
+                idx = text.index(found_text)
+                
+                # FIND ALL NUMBERS IN MATCHED TEXT
+                foundnumbers = "".join(re.findall("\d+", text[idx].replace(" ", "")))
+                
+                # REMOVE ANY CHARACTERS PRIOR TO PARTIAL MATCH TO KEY
+                for a in range(len(curr_key), 1, -1):
+                    currentnumbers = foundnumbers.split(curr_key[-a:])[-1]
+                    if currentnumbers != foundnumbers:
+                        break
+                
+                # IF WE HAVE EXACTLY 5 CHARACTERS, AND THE LAST IS 8, IT'S LIKELY IT WAS A MISREAD "B"
+                if len(currentnumbers) == 5 and (currentnumbers[-1] == "8" or currentnumbers[-1] == "7"):
+                    currentnumbers = currentnumbers[:-1]
+
+                if verbose:
+                    print(curr_key + currentnumbers + " | " +foundnumbers + " | " +  " /n ".join(text))
+
+                # CALCULATE COORDS FROM AFFINE 
+                bbox = dict[fn]['tile'][i]['bbox']
+                left, bottom = affine * (bbox[0], bbox[1])
+                right, top   = affine * (bbox[2], bbox[3])
+
+                # PREPARE DICT 
+                out_dict = dict[fn]['tile'][i]
+                out_dict['coords'] = np.array([left, bottom, right, top])
+
+                # SAVE OUTPUT
+                dupped_dict[curr_key + currentnumbers] = out_dict
+                
+                data = non_dupped_dict.get(curr_key + currentnumbers, None)
+                if data is None: 
+                    non_dupped_dict[curr_key + currentnumbers] = out_dict
+
+                else:
+                    i=0
+                    while data is not None:
+                        data = non_dupped_dict.get(curr_key + currentnumbers + f"_{i}", None)
+                        i = i + 1
+                    non_dupped_dict[curr_key + currentnumbers + f"_{i}"] = out_dict
+
+                db[findKey(fn)].append(curr_key + currentnumbers)
+
+    return db, non_dupped_dict, dupped_dict
+
+def notify(mess, level=2):
+    if level < 4:
+        print(mess)
+
+def WorldFilesToDataframe(input_dir, columns=None):
+    if not columns:
+        columns = ['filename', 'line1', 'line2', 'line3', 'line4', 'line5', 'line6']
+    
+    # READ ALL THE WORLD FILES FROM A DIRECTORY AND CREATE A DATAFRAME
+    data = read_world_files_from_directory(input_dir)
+    df = pd.DataFrame(data, columns=columns)
+
+    # CONVERT ALL READ PARAMETERS TO NUMERIC
+    for col in [col for col in df.columns if "line" in col]:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    return df
+
+def getWebmercator(df, input_dir, RLNN = None, verbose=False):
+    webmercator = []
+
+    # FOR EACH DATAFRAME
+    for i, row in tqdm(df.iterrows(), total=df.shape[0], disable=verbose):
+
+        # GET BASE FILENAME FOR WORLD FILE
+        fn = row['filename'].split(".")[0]
+        image_files = glob.glob(f'{os.path.join(input_dir, fn)}*[!w]')
+
+        # IF WE DON'T HAVE AN EPSG, CONTINUE
+        if pd.isna(row['epsg']):
+            notify(f"NO EPSG {fn}")
+            webmercator.append([])
+            continue
+        
+        # IF WE CAN'T FIND CORRESPONDING IMAGE
+        if len(image_files) == 0:
+            notify(f"NO CORRESPONDING IMAGE {fn}")
+            webmercator.append([])
+            continue
+
+        # FIND THE BOUNDS FOR THAT IMAGE
+        bounds, RLNN = findBounds(image_files[0], model=RLNN, verbose=False, device="cuda")
+
+        # IF WE COULDN'T FIND THE IMAGE, THEN NO PROJECTION
+        # TODO: ADD IMAGE SIZE
+        if len(bounds[0]) == 0:
+            notify(f"NO BOUNDS FOUND {image_files[0]}")
+            webmercator.append([])
+            continue
+        
+        # GET BOUNDING BOX
+        bbox = bounds[0].boxes.xyxy.numpy()[0]
+
+        # REPROJECT BOUNDING BOX
+        in_crs  = rio.crs.CRS.from_string(f"{row['epsg']}")
+        out_crs = rio.crs.CRS.from_epsg(f"3857")
+        left, bottom = row['affine'] * (bbox[0], bbox[1])
+        right, top   = row['affine'] * (bbox[2], bbox[3])
+        new_bbox = rio.warp.transform_bounds(in_crs, out_crs, left, bottom, right, top)
+
+        # APPEND TO STRUCTURE FOR DATAFRAME
+        webmercator.append(new_bbox)
+
+    df["webmerc"] = webmercator
+    return df
+
+def buildWorldFileDatabase(input_dir, db, stateplanes):
+    df = WorldFilesToDataframe(input_dir)
+
+    # FIND GEOMETRY FOR EACH ROW
+    df['key']   = df['filename'].apply(findTileKey, db=db)  # FIND THE KEY FOR THE FILENAME
+    df['key_n'] = pd.to_numeric(df['key'], errors='coerce') # CONVERT IT TO NUMERIC
+    df["GEOID"] = df["key_n"].apply(getGEOID)               # GET GEOID FOR EACH INDEX
+    df['county_polygon'] = df["GEOID"].apply(getGeometry)   # USE FIND GEOMETRY FUNCTION
+
+    # HEURISTICS - DEFINE WHETHER THE FOUND TRANSFORM IS STATEPLANE 
+    # BY IT'S SCALE. IF IT'S BIGGER THAN 1, PROBABLY (MOST FILE'S RESOLUTION IS < 0.5 m)
+    df['STATEPLANE'] = df['line1'] > 1
+
+    # INTERSECT DF WITH STATE PLANE SHAPEFILE 
+    geo_df   = gpd.GeoDataFrame(df, geometry=df['county_polygon']).set_crs("EPSG:3857").to_crs("EPSG:4326")
+    df_plane = geo_df.overlay(stateplanes, how='intersection')
+
+    # CALCULATE EPSG CODE
+    df['epsg'] = geo_df.apply(getEPSG, df_plane=df_plane, axis=1)
+    del geo_df, df_plane
+
+    df['geotransform'] = df['filename'].apply(getGeotransform, input_dir=input_dir)
+    df['affine'] = df['geotransform'].apply(getAffine)
+
+    df = getWebmercator(df, input_dir)
+
+    return df
+
+def enlarged_bounds(raster, n=1):
+    """
+    Returns an enlarged shapely box of the bounds of the given raster.
+    
+    Parameters:
+    raster (rasterio.io.DatasetReader): The input raster.
+    n (float): The factor by which to enlarge the bounds. n=1 means the same size, n=2 means twice as big, etc.
+    
+    Returns:
+    shapely.geometry.polygon.Polygon: The enlarged bounding box.
+    """
+    # Get the bounds of the raster
+    minx, miny, maxx, maxy = raster.bounds
+
+    # Calculate the center of the bounding box
+    center_x = (minx + maxx) / 2
+    center_y = (miny + maxy) / 2
+
+    # Calculate the new dimensions
+    width = (maxx - minx) * n
+    height = (maxy - miny) * n
+
+    # Calculate the new bounds
+    new_minx = center_x - width / 2
+    new_miny = center_y - height / 2
+    new_maxx = center_x + width / 2
+    new_maxy = center_y + height / 2
+
+    # Create a shapely box with the new bounds
+    enlarged_box = box(new_minx, new_miny, new_maxx, new_maxy)
+    
+    return enlarged_box
+
+def plotICP_streets(reprojected_points, initial=None, plot_skip=2, best=None):
+    # print(initial)
+    colors = ['b', 'g']
+    icp_iterations = len(reprojected_points)
+    fig, ax = plt.subplots()
+    colormap = plt.get_cmap('cool') 
+
+    for i in np.arange(plot_skip, icp_iterations, plot_skip):
+        ax.scatter(reprojected_points[i][:, 0], reprojected_points[i][:, 1], 
+            color=colormap(i / icp_iterations), s=1, label=f"Iteration {i}")
+        
+    if initial is not None:
+        for i, (k, v) in enumerate(initial.items()):
+            ax.scatter(v[:, 0], v[:, 1], label=k, color=colors[i], s=2, marker='x')
+        pass
+    if best is not None:
+        ax.scatter(best[:, 0], best[:, 1], color='red', s=2, marker='x', label="Best Fit")
+        
+    ax.legend()
+    ax.grid()
+    ax.axis("equal")
+    return ax
+
+def performICPonTile(TLNN, STCN, 
+                debug=False, 
+                plot=True,
+                icp_iterations=30, 
+                rotation=True, 
+                shear=False, 
+                perspective=False):
+    
+    
+    # COORDINATE HANDLING
+    # coords_TLNN = np.vstack((TLNN[0, :], TLNN[1, :], np.ones(TLNN[1, :].shape))).T
+    # coords_STCN = np.vstack((STCN[0, :], STCN[1, :], np.ones(STCN[1, :].shape))).T
+
+    # MAKE SURE BOTH HAVE COORDINATES
+    STCN['x'] = STCN['geometry'].x
+    STCN['y'] = STCN['geometry'].y
+    TLNN['x'] = TLNN['geometry'].x
+    TLNN['y'] = TLNN['geometry'].y
+
+    # GET POINT STRUCTURES
+    coords_TLNN = np.array(TLNN[['x', 'y']]) 
+    coords_STCN = np.array(STCN[['x', 'y']])
+    
+    # FAST SEARCH STRUCTURE
+    kdtree = cKDTree(coords_STCN)
+    
+    # ITERATIVE CLOSEST POINT STRUCTURES
+    reprojected_points    = []
+    compounded_homography = np.eye(3)
+    proc_points = coords_TLNN
+    
+    # OUTPUT STRUCTURES
+    transforms, grades = [], []
+    initial = {"shp" : coords_STCN, "detected" : coords_TLNN}
+    
+    # ITERATE
+    for i in tqdm(range(icp_iterations), disable=True):
+
+        # SEARCH CLOSEST POINT IN KDTREE
+        _, nearest_indices = kdtree.query(proc_points)
+        to_points = np.array([coords_STCN[idx] for idx in nearest_indices])
+        
+        # TAKE ADJUSTMENT STEP
+        new_homography = adjustStep_affine(proc_points, coords_STCN, kdtree,
+                                        shear=shear, rotation=rotation, perspective=perspective)
+        # print(new_homography)
+        
+        if debug:
+            fig, ax = plt.subplots()
+            ax.scatter(proc_points[:, 0], proc_points[:, 1])
+            ax.scatter(coords_STCN[:, 0], coords_STCN[:, 1])
+            ax.scatter(to_points[:, 0], to_points[:, 1])
+    
+            for i in range(proc_points.shape[0]):
+                plt.plot([proc_points[i, 0], to_points[i, 0]],
+                            [proc_points[i, 1], to_points[i, 1]], 'ko', linestyle="--")
+            plt.show()
+        
+        transform = new_homography.copy()
+        
+        # APPLY TRANSFORM FROM ADJUSTMENT TO PROCESSING POINTS AND APPEND TO LIST
+        reprojected_points.append(applyTransform(transform, proc_points))
+    
+        proc_points = applyTransform(transform, proc_points)
+        if debug:
+            plt.scatter(proc_points[:, 0], proc_points[:, 1])
+            plt.scatter(coords_STCN[:, 0], coords_STCN[:, 1])
+            plt.scatter(to_points[:, 0], to_points[:, 1])
+            plt.show()
+            
+        # COMPOUND TRANSFORMATION
+        compounded_homography = compounded_homography @ transform
+
+        # PUT ON OUTPUT STRUCTURES
+        transforms.append(compounded_homography)
+        grades.append(gradeFit(proc_points, kdtree))
+        
+        if i % 1 == 0:
+            scale  = np.sqrt((new_homography[0, 0] ** 2 + new_homography[1, 1] ** 2) / 2)
+            offset = np.sqrt((new_homography[1, 2] ** 2 + new_homography[0, 2] ** 2) / 2)
+            # print(f"Scale: {scale:.2f} Offset: {offset:.2f}")
+
+    # GET BEST TRANSFORMS
+    best_transform = transforms[np.argmin(grades)]
+    best_points    = reprojected_points[np.argmin(grades)]
+    
+    if debug:
+        plt.plot(range(len(grades)), grades)
+        plt.scatter(np.argmin(grades), grades[np.argmin(grades)])
+        plt.show()
+    
+    if plot:
+        plotICP_streets(reprojected_points, initial=initial, plot_skip=5, best=best_points)
+        plt.show()
+    
+    transform_dict = {
+        "initial" : initial,
+        "reproj"  : reprojected_points,
+        "best"    : best_transform,
+        "list"    : transforms,
+        "grades"  : grades
+    }
+
+    return best_transform, transform_dict
+
 '''
 def findRoads(image, model=None, num_classes=2, num_pyramids=2,
                 cnn_run_params=None, cnn_creation_params=None, device="cuda",

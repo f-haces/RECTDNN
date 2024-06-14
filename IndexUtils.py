@@ -46,8 +46,8 @@ def init_databases(ref_dir):
     """
     global CIDs, counties, places
     CIDs     = pd.read_csv(f"{ref_dir}CountyCIDs.csv", index_col=0)
-    counties = gpd.read_file(f"{ref_dir}Counties.shp")
-    places   = gpd.read_file(f"{ref_dir}Places.shp")
+    counties = gpd.read_file(f"{ref_dir}Counties.shp", engine='pyogrio', use_arrow=True)
+    places   = gpd.read_file(f"{ref_dir}Places.shp", engine='pyogrio', use_arrow=True)
 
     counties["GEOID"] = counties["GEOID"].astype(np.int32)
     places["GEOID"]   = places["GEOID"].astype(np.int32)
@@ -647,6 +647,7 @@ def runYOLO_Text(image_fn, model=None,
         keyed_text = False,
         target_size = 1920,
         conf_threshold = 0.92,
+        ret_values=False,
         plot_params = {}
         ):
     
@@ -683,7 +684,7 @@ def runYOLO_Text(image_fn, model=None,
         width, height, _ = image.shape
     else:
         width, height = image.shape
-    im_size_arry  = np.array([width, height, width, height])
+    im_size_arry  = np.array([height, width, height, width,])
 
     # ONLY SPEND TIME TO CONVERT IMAGE IF WE ARE ACTUALLY USING IT TO EXTRACT DATA
     if get_data:
@@ -728,6 +729,8 @@ def runYOLO_Text(image_fn, model=None,
     if save_dir is not None:
         results[0].save(save_dir, **plot_params)
 
+    if ret_values:
+        return outputs, model, results[0]
     return outputs, model
 
 def saveTiles(tiles, output_image_fn):
