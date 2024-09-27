@@ -503,7 +503,7 @@ def gradeFit(pts1, kdtree):
         matrix: np.array representing translation matrix
     '''
     dist, _ = kdtree.query(pts1)
-    return np.sqrt(np.sum(dist ** 2))
+    return np.sqrt(np.sum(dist ** 2) / dist.shape[0])
 
 def performICPonIndex(boundaries, dnn_outputs,
                debug=False, plot=True, icp_iterations=30,
@@ -637,6 +637,7 @@ def performICPonIndex(boundaries, dnn_outputs,
 
     return transform_dict
 
+'''
 def runYOLO_Text(image_fn, model=None, 
         model_weights=f"{data_dir}BBNN/weights042924.pt",
         save_dir=None,
@@ -661,6 +662,104 @@ def runYOLO_Text(image_fn, model=None,
     
     # RUN MODEL
     results = model(image_fn, imgsz=target_size, verbose=verbose)
+
+    if device == "cuda":
+        results = [result.cpu() for result in results]
+        model   = model.to("cpu")
+
+    # FIND KEY FOR FILE
+    basen = os.path.basename(results[0].path)[:-4]
+    key = findKey(basen)
+    
+    ''UPDATE 06/04/24 WE ARE NO LONGER RESIZING BEFORE INFERENCE SO I'M REMOVING TO OPIMIZE
+    # GOTTA FIND CORRECT FILE BC RESIZED WERE SAVED WITH PNG EXTENSION
+    in_fn = glob.glob(os.path.join(input_folder,  basen + '*[!w]'))[0]
+    image = Image.open(in_fn)
+    width, height = image.size
+    im_size_arry  = np.array([width, height, width, height])
+    ''
+    # LOAD IMAGE FROM RESULTS AND GET DIMENSIONS
+    # TODO: DOUBLE CHECK DIMENSION ORDER HERE
+    image = results[0].orig_img
+    if image.ndim == 3:
+        width, height, _ = image.shape
+    else:
+        width, height = image.shape
+    im_size_arry  = np.array([height, width, height, width,])
+
+    # ONLY SPEND TIME TO CONVERT IMAGE IF WE ARE ACTUALLY USING IT TO EXTRACT DATA
+    if get_data:
+        image = Image.fromarray(image)
+
+    # OUTPUT STRUCTURE
+    outputs = {}
+    
+    # YOLO CONFIDENCE
+    conf = results[0].boxes.data.numpy()[:, -2] # GET CONFIDENCE LEVELS
+    slice = conf > conf_threshold               # SLICE CONFIDENCE LEVELS WITH THRESHOLDS
+
+    # FOR EACH RESULT 
+    for i in range(results[0].boxes.xyxyn.numpy().shape[0]): # np.where(slice)[0]: 
+        
+        # GET BBOX DATA
+        bbox = results[0].boxes.xyxyn.numpy()[i]
+
+        if get_data:
+            data = extract_bounded_area(image, bbox)
+        else:
+            data = None
+
+        bbox = bbox * im_size_arry
+
+        # FIND TE
+        if find_text:
+            text = pytesseract.image_to_string(data, config='--psm 12 --oem 3') # -c tessedit_char_whitelist=0123456789
+
+            if keyed_text:
+                word = find_word_with_key(text, key, threshold=80, verbose=False)
+
+                if isinstance(word, list):
+                    word = ",".join(word)
+            else:
+                word = None
+        else:
+            text, word = None, None
+
+        outputs[i] = {"bbox" : bbox, "data" : data, "text" : text, "keyed_text" : word, "confidence" : conf[i]}
+
+    if save_dir is not None:
+        results[0].save(save_dir, **plot_params)
+
+    if ret_values:
+        return outputs, model, results[0]
+    return outputs, model
+'''
+
+def runYOLO_Text(image_fn, model=None, 
+        model_weights=f"{data_dir}BBNN/weights042924.pt",
+        save_dir=None,
+        device="cuda",
+        verbose=True,
+        get_data = True,
+        find_text = True,
+        keyed_text = False,
+        target_size = 1920,
+        conf_threshold = 0.92,
+        ret_values=False,
+        max_det=5000,
+        plot_params = {}
+        ):
+    
+    
+    input_folder = os.path.dirname(os.path.abspath(image_fn))
+
+    # INITIALIZE MODEL AS NEEDED
+    if model is None:
+        model = ultralytics.YOLO(model_weights).to("cpu")
+    model = model.to(device)
+    
+    # RUN MODEL
+    results = model(image_fn, imgsz=target_size, verbose=verbose, max_det=max_det)
 
     if device == "cuda":
         results = [result.cpu() for result in results]

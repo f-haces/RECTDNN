@@ -510,11 +510,11 @@ def enlarged_bounds(raster, n=1):
     
     return enlarged_box
 
-def plotICP_streets(reprojected_points, initial=None, plot_skip=2, best=None):
+def plotICP_streets(reprojected_points, initial=None, plot_skip=2, best=None, dpi=200, figsize=(10, 10)):
     # print(initial)
     colors = ['b', 'g']
     icp_iterations = len(reprojected_points)
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(dpi=dpi, figsize=figsize)
     colormap = plt.get_cmap('cool') 
 
     for i in np.arange(plot_skip, icp_iterations, plot_skip):
@@ -531,7 +531,12 @@ def plotICP_streets(reprojected_points, initial=None, plot_skip=2, best=None):
     ax.legend()
     ax.grid()
     ax.axis("equal")
-    return ax
+    return fig, ax
+
+def checkConvergence(grades, conv=0.01):
+    if len(grades) < 2:
+        return False
+    return np.abs(grades[-1] - grades[-2]) < conv
 
 def performICPonTile(TLNN, STCN, 
                 debug=False, 
@@ -539,7 +544,11 @@ def performICPonTile(TLNN, STCN,
                 icp_iterations=30, 
                 rotation=True, 
                 shear=False, 
-                perspective=False):
+                perspective=False,
+                save_fig=None,
+                conv=0.01,
+                rotation_limit=None,
+                ):
     
     
     # COORDINATE HANDLING
@@ -567,7 +576,119 @@ def performICPonTile(TLNN, STCN,
     # OUTPUT STRUCTURES
     transforms, grades = [], []
     initial = {"shp" : coords_STCN, "detected" : coords_TLNN}
+
+    # ITERATE
+    for i in tqdm(range(icp_iterations), disable=True):
+
+        # SEARCH CLOSEST POINT IN KDTREE
+        _, nearest_indices = kdtree.query(proc_points)
+        to_points = np.array([coords_STCN[idx] for idx in nearest_indices])
+        
+        # TAKE ADJUSTMENT STEP
+        new_homography = adjustStep_affine(proc_points, coords_STCN, kdtree,
+                                        shear=shear, rotation=rotation, perspective=perspective, rotation_limit=rotation_limit)
+        # print(new_homography)
+        
+        if debug:
+            fig, ax = plt.subplots()
+            ax.scatter(proc_points[:, 0], proc_points[:, 1])
+            ax.scatter(coords_STCN[:, 0], coords_STCN[:, 1])
+            ax.scatter(to_points[:, 0], to_points[:, 1])
     
+            for i in range(proc_points.shape[0]):
+                plt.plot([proc_points[i, 0], to_points[i, 0]],
+                            [proc_points[i, 1], to_points[i, 1]], 'ko', linestyle="--")
+            plt.show()
+        
+        transform = new_homography.copy()
+        
+        # APPLY TRANSFORM FROM ADJUSTMENT TO PROCESSING POINTS AND APPEND TO LIST
+        reprojected_points.append(applyTransform(transform, proc_points))
+    
+        proc_points = applyTransform(transform, proc_points)
+        if debug:
+            plt.scatter(proc_points[:, 0], proc_points[:, 1])
+            plt.scatter(coords_STCN[:, 0], coords_STCN[:, 1])
+            plt.scatter(to_points[:, 0], to_points[:, 1])
+            plt.show()
+            
+        # COMPOUND TRANSFORMATION
+        compounded_homography = compounded_homography @ transform
+
+        # PUT ON OUTPUT STRUCTURES
+        transforms.append(compounded_homography)
+        grades.append(gradeFit(proc_points, kdtree))
+        
+        if checkConvergence(grades, conv=conv):
+            break
+
+        if i % 1 == 0:
+            scale  = np.sqrt((new_homography[0, 0] ** 2 + new_homography[1, 1] ** 2) / 2)
+            offset = np.sqrt((new_homography[1, 2] ** 2 + new_homography[0, 2] ** 2) / 2)
+            # print(f"Scale: {scale:.2f} Offset: {offset:.2f}")
+
+    # GET BEST TRANSFORMS
+    best_transform = transforms[np.argmin(grades)]
+    best_points    = reprojected_points[np.argmin(grades)]
+    
+    if debug:
+        plt.plot(range(len(grades)), grades)
+        plt.scatter(np.argmin(grades), grades[np.argmin(grades)])
+        plt.show()
+    
+    if plot:
+        fig, ax = plotICP_streets(reprojected_points, initial=initial, plot_skip=5, best=best_points)
+        if save_fig:
+            fig.savefig(save_fig)
+        plt.show()
+    
+    transform_dict = {
+        "initial" : initial,
+        "reproj"  : reprojected_points,
+        "best"    : best_transform,
+        "list"    : transforms,
+        "grades"  : grades
+    }
+
+    return best_transform, transform_dict
+
+def performICPonTile_roads(TLNN, STCN, 
+                debug=False, 
+                plot=True,
+                icp_iterations=30, 
+                rotation=True, 
+                shear=False, 
+                perspective=False,
+                save_fig=None,
+                ):
+    
+    
+    # COORDINATE HANDLING
+    # coords_TLNN = np.vstack((TLNN[0, :], TLNN[1, :], np.ones(TLNN[1, :].shape))).T
+    # coords_STCN = np.vstack((STCN[0, :], STCN[1, :], np.ones(STCN[1, :].shape))).T
+
+    # MAKE SURE BOTH HAVE COORDINATES
+    STCN['x'] = STCN['geometry'].x
+    STCN['y'] = STCN['geometry'].y
+    TLNN['x'] = TLNN['geometry'].x
+    TLNN['y'] = TLNN['geometry'].y
+
+    # GET POINT STRUCTURES
+    coords_TLNN = np.array(TLNN[['x', 'y']]) 
+    coords_STCN = np.array(STCN[['x', 'y']])
+    
+    # FAST SEARCH STRUCTURE
+    kdtree = cKDTree(coords_STCN)
+    
+    # ITERATIVE CLOSEST POINT STRUCTURES
+    reprojected_points    = []
+    compounded_homography = np.eye(3)
+    proc_points = coords_TLNN
+    
+    # OUTPUT STRUCTURES
+    transforms, grades = [], []
+    initial = {"shp" : coords_STCN, "detected" : coords_TLNN}
+
     # ITERATE
     for i in tqdm(range(icp_iterations), disable=True):
 
@@ -610,6 +731,9 @@ def performICPonTile(TLNN, STCN,
         transforms.append(compounded_homography)
         grades.append(gradeFit(proc_points, kdtree))
         
+        if checkConvergence(grades):
+            break
+
         if i % 1 == 0:
             scale  = np.sqrt((new_homography[0, 0] ** 2 + new_homography[1, 1] ** 2) / 2)
             offset = np.sqrt((new_homography[1, 2] ** 2 + new_homography[0, 2] ** 2) / 2)
@@ -625,7 +749,9 @@ def performICPonTile(TLNN, STCN,
         plt.show()
     
     if plot:
-        plotICP_streets(reprojected_points, initial=initial, plot_skip=5, best=best_points)
+        fig, ax = plotICP_streets(reprojected_points, initial=initial, plot_skip=5, best=best_points)
+        if save_fig:
+            fig.savefig(save_fig)
         plt.show()
     
     transform_dict = {

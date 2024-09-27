@@ -104,7 +104,7 @@ def adjustStep_cv2(from_points, coords_ras, kdtree, shear=True, rotation = True,
     return new_homography
 
 def adjustStep_affine(from_points, coords_ras, kdtree, 
-                      shear=True, rotation = True, perspective=True):
+                      shear=True, rotation = True, perspective=True, rotation_limit=None):
     
     # TODO: IMPLEMENT SIMILARITY AND PERSPECTIVE TRANSFORMATIONS WHEN APPROPRIATE
 
@@ -112,15 +112,21 @@ def adjustStep_affine(from_points, coords_ras, kdtree,
     _, nearest_indices = kdtree.query(from_points)
     to_points = np.array([coords_ras[idx] for idx in nearest_indices])
 
-    if shear:
+    if shear and rotation:
         transform = affineTransformation(from_points[:, 0], from_points[:, 1], 
+                                             to_points[:, 0], to_points[:, 1],
+                                             verbose=False
+                                 )
+        
+    if not rotation: 
+        transform = scalingTranslationTransformation(from_points[:, 0], from_points[:, 1], 
                                              to_points[:, 0], to_points[:, 1],
                                              verbose=False
                                  )
     else:
         transform = similarityTransformation(from_points[:, 0], from_points[:, 1], 
                                              to_points[:, 0], to_points[:, 1],
-                                             verbose=False)
+                                             verbose=False, rotation_limit=rotation_limit)
     
     new_homography = transform.matrix
     

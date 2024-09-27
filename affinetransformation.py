@@ -17,6 +17,89 @@ def evalFuncs(a, currdict):
     return a
     
 class affineTransformation:
+    def __init__(self, x_c, y_c, x_f, y_f, weights=None, verbose=False):
+        """
+        Extended to handle weights for weighted least squares
+        """
+        # CONVERT EVERYTHING TO NUMPY ARRAY AND INDEX AS DEPTH
+        x_c = np.array(x_c)[np.newaxis, :]
+        y_c = np.array(y_c)[np.newaxis, :]
+        x_f = np.array(x_f)[np.newaxis, :]
+        y_f = np.array(y_f)[np.newaxis, :]
+
+        # CREATE L-MATRIX TO BE 2Px1
+        l = np.dstack((x_f, y_f)).flatten()
+
+        # CREATE A MATRIX
+        a = np.vstack((x_c, y_c, np.ones(x_c.shape), np.zeros(x_c.shape), np.zeros(x_c.shape), np.zeros(x_c.shape))).T
+        b = np.vstack((np.zeros(x_c.shape), np.zeros(x_c.shape), np.zeros(x_c.shape), x_c, y_c, np.ones(x_c.shape))).T
+
+        outl = list()
+        for i in range(x_c.size):
+            outl.append(a[i, :])
+            outl.append(b[i, :])
+
+        # CONVERT LIST OF NP.ARRAYS TO NP.ARRAY
+        A = np.array(outl)
+
+        # APPLY WEIGHTS IF PROVIDED
+        if weights is not None:
+            W = np.diag(weights.flatten())
+        else:
+            W = np.eye(A.shape[0])  # Identity matrix for no weights (standard least squares)
+
+        # MODIFYED LEAST SQUARES SOLUTION WITH WEIGHTS
+        AtW = A.T @ W
+        x_cap_temp = np.linalg.inv(AtW @ A) @ AtW
+        x_cap = x_cap_temp @ l
+
+        # SAVE VALUES FOR TRANSFORMATION PARAMETERS
+        self.x_cap = x_cap
+        self.a = x_cap[0]
+        self.b = x_cap[1]
+        self.c = x_cap[3]
+        self.d = x_cap[4]
+        self.x_translation = x_cap[2]
+        self.y_translation = x_cap[5]
+        self.scalex = np.sqrt(self.a ** 2 + self.c ** 2)
+        self.scaley = np.sqrt(self.b ** 2 + self.d ** 2)
+        top = (self.a * self.b + self.c * self.d)
+        bot = (self.a * self.b - self.c * self.d)
+        self.nonortho = np.arctan(top / bot)
+        self.rotation = np.arctan(self.c / self.a)
+
+        self.matrix = np.array([[self.a, self.b, self.x_translation], 
+                                [self.c, self.d, self.y_translation],
+                                [     0,      0,                  1]])
+
+        self.currdict = {
+            "a": self.a,
+            "b": self.b,
+            "c": self.c,
+            "d": self.d,
+            "x_translation": self.x_translation,
+            "y_translation": self.y_translation,
+            "scalex": self.scalex, 
+            "scaley": self.scaley,
+            "nonortho": self.nonortho,
+            "rotation": self.rotation
+        }
+
+        if verbose:
+            print("\nAffine Transformation Parameters -------------------------")
+            for k, v in self.currdict.items():
+                print("{:<8} {:<15.3e}".format(k, v))
+
+    def transform(self, x_c, y_c):
+        # CREATE A MATRIX
+        temp_matrix = np.array([[self.a, self.b], [self.c, self.d]])
+        # MULTIPLY TIMES WEIGHTS AND ADD TRANSLATION 
+        temp_out = temp_matrix @ np.vstack((x_c, y_c))
+        temp_out = temp_out.T + np.array([self.x_translation, self.y_translation])
+        # RETURN VALUES
+        return temp_out[:, 0], temp_out[:, 1]
+
+class affineTransformation_NonWeighted:
     """
     This class forms an affine transformation. The initialization method 
     expects 1D numpy arrays, which are transformed into a 3D space to form 
@@ -139,7 +222,12 @@ class similarityTransformation:
         rotation (np.array): rotation value 
     """
     
-    def __init__(self, x_c, y_c, x_f, y_f, verbose=True):
+    def __init__(self, x_c, y_c, x_f, y_f, verbose=True, rotation_limit=None, weights=None):
+
+        if rotation_limit is None:
+            self.rotation_limit = None
+        else:
+            self.rotation_limit = np.radians(rotation_limit)
         
         # CONVERT EVERYTHING TO NUMPY ARRAY AND INDEX AS DEPTH
         x_c = np.array(x_c)[np.newaxis, :]
@@ -163,9 +251,16 @@ class similarityTransformation:
         # CONVERT LIST OF NP.ARRAYS TO NP.ARRAY
         A = np.array(outl)
         
-        # CALCULATE X_CAP
-        x_cap_temp = np.matmul(np.linalg.inv(np.matmul(A.T, A)), A.T)
-        x_cap = np.matmul(x_cap_temp, l)
+        # APPLY WEIGHTS IF PROVIDED
+        if weights is not None:
+            W = np.diag(weights.flatten())
+        else:
+            W = np.eye(A.shape[0])  # Identity matrix for no weights (standard least squares)
+
+        # MODIFYED LEAST SQUARES SOLUTION WITH WEIGHTS
+        AtW = A.T @ W
+        x_cap_temp = np.linalg.inv(AtW @ A) @ AtW
+        x_cap = x_cap_temp @ l
         
         # SAVE VALUES
         self.x_cap = x_cap
@@ -175,6 +270,12 @@ class similarityTransformation:
         self.y_translation = x_cap[3]
         self.scale = np.sqrt(self.a ** 2 + self.b ** 2)
         self.rotation = np.arctan(self.b / self.a)
+
+        # Apply rotation limit
+        if self.rotation_limit is not None and self.rotation > self.rotation_limit:
+            self.rotation = self.rotation_limit
+        elif self.rotation < -self.rotation_limit:
+            self.rotation = -self.rotation_limit
         
         self.matrix = np.array([
             [self.a, -1 * self.b, self.x_translation], 
@@ -202,6 +303,93 @@ class similarityTransformation:
         # MULTIPLY TIMES WEIGHTS AND ADD TRANSLATION 
         temp_out = temp_matrix @ np.vstack((x_c, y_c))
         temp_out = temp_out.T + np.array([self.x_translation, self.y_translation])
+        
+        # RETURN VALUES
+        return temp_out[:, 0], temp_out[:, 1]
+
+class scalingTranslationTransformation:
+    
+    """
+    This class forms a scaling and translation transformation, without rotation.
+    The initialization method expects 1D numpy arrays, which are transformed 
+    into a 3D space to form the A matrix and calculate transformation values.
+
+    Args:
+        x_c (1d np.array): X coordinates in comparator system
+        y_c (1d np.array): Y coordinates in comparator system
+        x_f (1d np.array): X coordinates for fiducial system
+        y_f (1d np.array): Y coordinates for fiducial system
+        verbose (boolean): Whether to print estimated parameters upon init, default=True
+
+    Attributes:
+        x_cap (np.array): estimates for coordinates in fiducial system
+        scale (float): scale value (uniform scaling)
+        x_translation (float): value for translation in the x-direction
+        y_translation (float): value for translation in the y-direction
+    """
+    
+    def __init__(self, x_c, y_c, x_f, y_f, weights=None, verbose=True):
+        
+        # CONVERT EVERYTHING TO NUMPY ARRAY AND INDEX AS DEPTH
+        x_c = np.array(x_c)[np.newaxis, :]
+        y_c = np.array(y_c)[np.newaxis, :]
+        
+        x_f = np.array(x_f)[np.newaxis, :]
+        y_f = np.array(y_f)[np.newaxis, :]
+        
+        # CREATE L-MATRIX TO BE 2Px1
+        l = np.dstack((x_f, y_f)).flatten()
+        
+        # CREATE A MATRIX FOR SCALING AND TRANSLATION ONLY
+        a = np.vstack((x_c, np.ones(x_c.shape), np.zeros(x_c.shape))).T
+        b = np.vstack((y_c, np.zeros(x_c.shape), np.ones(x_c.shape))).T
+
+        outl = list()
+        for i in range(x_c.size):
+            outl.append(a[i, :])
+            outl.append(b[i, :])
+            
+        # CONVERT LIST OF NP.ARRAYS TO NP.ARRAY
+        A = np.array(outl)
+        
+        # APPLY WEIGHTS IF PROVIDED
+        if weights is not None:
+            W = np.diag(weights.flatten())
+        else:
+            W = np.eye(A.shape[0])  # Identity matrix for no weights (standard least squares)
+
+        # MODIFYED LEAST SQUARES SOLUTION WITH WEIGHTS
+        AtW = A.T @ W
+        x_cap_temp = np.linalg.inv(AtW @ A) @ AtW
+        x_cap = x_cap_temp @ l
+        
+        # SAVE VALUES
+        self.x_cap = x_cap
+        self.scale = x_cap[0]  # Only one scale value, no rotation
+        self.x_translation = x_cap[1]
+        self.y_translation = x_cap[2]
+        
+        # CREATE MATRIX WITH ONLY SCALING AND TRANSLATION
+        self.matrix = np.array([
+            [self.scale, 0, self.x_translation], 
+            [0, self.scale, self.y_translation],
+            [0, 0, 1]])
+        
+        self.currdict = {
+            "scale" : self.scale,
+            "x_translation" : self.x_translation,
+            "y_translation" : self.y_translation
+        }
+        
+        if verbose:
+            print("\nScaling and Translation Transformation Parameters -------------------------")
+            for k, v in self.currdict.items():
+                print("{:<8} {:<15.3e}".format(k, v))
+        
+    def transform(self, x_c, y_c):
+        # APPLY SCALING AND TRANSLATION, NO ROTATION
+        temp_out = self.scale * np.vstack((x_c, y_c)).T
+        temp_out = temp_out + np.array([self.x_translation, self.y_translation])
         
         # RETURN VALUES
         return temp_out[:, 0], temp_out[:, 1]
