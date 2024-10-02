@@ -274,7 +274,7 @@ class similarityTransformation:
         # Apply rotation limit
         if self.rotation_limit is not None and self.rotation > self.rotation_limit:
             self.rotation = self.rotation_limit
-        elif self.rotation < -self.rotation_limit:
+        elif self.rotation_limit is not None and self.rotation < -self.rotation_limit:
             self.rotation = -self.rotation_limit
         
         self.matrix = np.array([

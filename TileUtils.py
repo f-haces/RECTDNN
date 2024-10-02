@@ -548,6 +548,7 @@ def performICPonTile(TLNN, STCN,
                 save_fig=None,
                 conv=0.01,
                 rotation_limit=None,
+                weights=None
                 ):
     
     
@@ -586,7 +587,7 @@ def performICPonTile(TLNN, STCN,
         
         # TAKE ADJUSTMENT STEP
         new_homography = adjustStep_affine(proc_points, coords_STCN, kdtree,
-                                        shear=shear, rotation=rotation, perspective=perspective, rotation_limit=rotation_limit)
+                                        shear=shear, rotation=rotation, perspective=perspective, rotation_limit=rotation_limit, weights=weights)
         # print(new_homography)
         
         if debug:

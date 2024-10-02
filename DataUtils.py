@@ -409,7 +409,8 @@ def bomb_edges(image, size=2, dims=None):
     image[0:size, :, dims] = rep_value
     image[-size:, :, dims] = rep_value
     
-    c = np.setdiff1d([0,1,2], dims)
+
+    c = np.setdiff1d(range(image.shape[-1]), dims)
     image[:, 0:size, c] = 0
     image[:, -size:, c] = 0
     image[0:size, :, c] = 0

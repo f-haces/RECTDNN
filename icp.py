@@ -104,10 +104,8 @@ def adjustStep_cv2(from_points, coords_ras, kdtree, shear=True, rotation = True,
     return new_homography
 
 def adjustStep_affine(from_points, coords_ras, kdtree, 
-                      shear=True, rotation = True, perspective=True, rotation_limit=None):
+                      shear=True, rotation = True, perspective=True, rotation_limit=None, weights=None):
     
-    # TODO: IMPLEMENT SIMILARITY AND PERSPECTIVE TRANSFORMATIONS WHEN APPROPRIATE
-
     # CALCULATE NEAREST POINTS AND FIND HOMOGRAPHY
     _, nearest_indices = kdtree.query(from_points)
     to_points = np.array([coords_ras[idx] for idx in nearest_indices])
@@ -115,18 +113,52 @@ def adjustStep_affine(from_points, coords_ras, kdtree,
     if shear and rotation:
         transform = affineTransformation(from_points[:, 0], from_points[:, 1], 
                                              to_points[:, 0], to_points[:, 1],
-                                             verbose=False
+                                             verbose=False, weights=None
                                  )
         
     if not rotation: 
         transform = scalingTranslationTransformation(from_points[:, 0], from_points[:, 1], 
                                              to_points[:, 0], to_points[:, 1],
-                                             verbose=False
+                                             verbose=False, weights=None
                                  )
     else:
         transform = similarityTransformation(from_points[:, 0], from_points[:, 1], 
                                              to_points[:, 0], to_points[:, 1],
-                                             verbose=False, rotation_limit=rotation_limit)
+                                             verbose=False, rotation_limit=rotation_limit, weights=None)
+    
+    new_homography = transform.matrix
+    
+    if not shear:
+        scale  = np.sqrt((new_homography[0, 0] ** 2 + new_homography[1, 1] ** 2) / 2)
+        new_homography[0, 0] = scale 
+        new_homography[1, 1] = scale
+    if not perspective:
+        new_homography[2, 0] = 0 
+        new_homography[2, 1] = 0 
+    if not rotation:
+        new_homography[0, 1] = 0 
+        new_homography[1, 0] = 0 
+    
+    return new_homography
+
+def adjustStep_affine_weighted(from_points, to_points, 
+                      shear=True, rotation = True, perspective=True, rotation_limit=None, weights=None):
+
+    if shear and rotation:
+        transform = affineTransformation(from_points[:, 0], from_points[:, 1], 
+                                             to_points[:, 0], to_points[:, 1],
+                                             verbose=False, weights=None
+                                 )
+        
+    if not rotation: 
+        transform = scalingTranslationTransformation(from_points[:, 0], from_points[:, 1], 
+                                             to_points[:, 0], to_points[:, 1],
+                                             verbose=False, weights=None
+                                 )
+    else:
+        transform = similarityTransformation(from_points[:, 0], from_points[:, 1], 
+                                             to_points[:, 0], to_points[:, 1],
+                                             verbose=False, rotation_limit=rotation_limit, weights=None)
     
     new_homography = transform.matrix
     
@@ -196,3 +228,5 @@ def icp(A, B, init_pose=None, max_iterations=20, tolerance=0.001):
     T,_,_ = best_fit_transform(A, src[:m,:].T)
 
     return T, distances, i
+
+
