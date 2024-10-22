@@ -9,6 +9,7 @@ TrainDataset/
 templates/
 ZZZ_ScrapFiles/
 .ipynb_checkpoints/
+runs/
 
 *.pth
 *.png

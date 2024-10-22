@@ -1001,3 +1001,324 @@ ax.scatter(inters.geometry.x.tolist(), inters.geometry.y.tolist(), marker='x', s
 fig.savefig("test.png")
 
 '''
+
+def calcCenter(a):
+    # CALCULATES CENTER OF BOUNDING BOX IN FORM X1 Y1 X2 Y2
+    return (a[0] + a[2]) / 2, (a[1] + a[3]) / 2
+
+def pointsToGeodataFrame(ra, y, x):
+    # RETURNS A GEODATAFRAME OF POINT COORDINATES GIVEN A SERIES OF PIXEL PAIRS ON A GIVEN RASTER
+    xs, ys = rio.transform.xy(ra.transform, y, x)
+    xy = list(zip(xs, ys))
+    points = MultiPoint(xy)
+    detections = gpd.GeoDataFrame(index=[0], geometry=[points]).explode(ignore_index=False, index_parts=False)
+    return detections
+
+def draw_bounding_boxes(bboxes, shape):
+    # DRAWS BOUNDING BOXES IN IMAGE
+    # Create a zero numpy array with the specified shape
+    img = np.zeros(shape, dtype=np.uint8)
+    
+    # Iterate through each bounding box
+    for bbox in bboxes:
+        x1, y1, x2, y2 = np.int32(bbox)
+        # Fill the region specified by the bounding box with 255
+        img[y1:y2, x1:x2] = 255
+    
+    return img
+
+def cleanImageBBOX(image, bbox, rep_value = 0, add=100):
+    # SETS EDGES OF IMAGE TO A GIVEN REPLACEMENT VALUE (SIMILAR TO BOMB EDGES)
+    image[:bbox[1]+add, :] = rep_value
+    image[bbox[3]-add:, :] = rep_value
+    image[:, :bbox[0]+add] = rep_value
+    image[:, bbox[2]-add:] = rep_value
+    return image
+
+def cleanCenterBBOX(coords, bbox):
+    # RETURNS ONLY BOUNDING BOXES WITHIN A GIVEN, LARGER BOUNDING BOX
+    x1, y1, x2, y2 = bbox
+    
+    # Check which coordinates are within the bounding box limits
+    mask = (coords[:, 0] >= x1) & (coords[:, 0] <= x2) & (coords[:, 1] >= y1) & (coords[:, 1] <= y2)
+    
+    # Filter the coordinates using the mask
+    return coords[mask]
+
+def getClosestPoints(kdtrees, proc_points, sear_points, weights=None, proc_limit=1000, idx=None, dist_threshold=None):
+    assert len(kdtrees) == len(proc_points)
+    assert len(proc_points) == len(sear_points)
+
+    if idx is None:
+        idx = [[]] * len(kdtrees)
+
+    out_proc_points = []
+    out_to_points   = []
+    out_weights = []
+
+    if weights is None:
+        weights = [1] * len(sear_points)
+
+    for i, kdtree in enumerate(kdtrees):
+
+        if proc_points[i].shape[0] > proc_limit:
+            if len(idx[i]) == 0:
+                idx[i] = np.random.permutation(proc_points[i].shape[0])[:proc_limit] # np.random.default_rng().choice(proc_points[i].shape[0], size=proc_limit, replace=False)
+            proc_points_curr = proc_points[i][idx[i]]
+        else:
+            proc_points_curr = proc_points[i]
+
+        dist, nearest_indices = kdtree.query(proc_points_curr)
+
+        if dist_threshold is not None:
+            proc_points_curr = proc_points_curr[dist < dist_threshold]
+            nearest_indices  = nearest_indices[dist < dist_threshold]
+        
+        if len(nearest_indices) != 0:
+            to_points_temp = np.array([sear_points[i][idx] for idx in nearest_indices])
+            out_weights.append([weights[i]] * nearest_indices.shape[0]) 
+            out_to_points.append(to_points_temp)
+            out_proc_points.append(proc_points_curr)
+
+    proc_points = np.vstack(out_proc_points)
+    to_points   = np.vstack(out_to_points)
+    weights     = np.hstack(out_weights)
+
+    return proc_points, to_points, weights, idx
+
+
+def adjustStep_affine_weighted(from_points, to_points, 
+                      shear=True, rotation = True, perspective=True, rotation_limit=None, weights=None,):
+
+    if shear and rotation:
+        transform = affineTransformation(from_points[:, 0], from_points[:, 1], 
+                                             to_points[:, 0], to_points[:, 1],
+                                             verbose=False, weights=None
+                                 )
+        
+    if not rotation: 
+        transform = scalingTranslationTransformation(from_points[:, 0], from_points[:, 1], 
+                                             to_points[:, 0], to_points[:, 1],
+                                             verbose=False, weights=None
+                                 )
+    else:
+        transform = similarityTransformation(from_points[:, 0], from_points[:, 1], 
+                                             to_points[:, 0], to_points[:, 1],
+                                             verbose=False, rotation_limit=rotation_limit, weights=None)
+    
+    new_homography = transform.matrix
+    
+    if not shear:
+        scale  = np.sqrt((new_homography[0, 0] ** 2 + new_homography[1, 1] ** 2) / 2)
+        new_homography[0, 0] = scale 
+        new_homography[1, 1] = scale
+    if not perspective:
+        new_homography[2, 0] = 0 
+        new_homography[2, 1] = 0 
+    if not rotation:
+        new_homography[0, 1] = 0 
+        new_homography[1, 0] = 0 
+    
+    return new_homography
+
+def performWeightedICPonTile(detections, references, 
+                debug=False, 
+                plot=True,
+                icp_iterations=30, 
+                rotation=True, 
+                shear=False, 
+                perspective=False,
+                save_fig=None,
+                conv=0.01,
+                rotation_limit=None,
+                weights=None, 
+                proc_limit = 10000,
+                plot_datasets=[],
+                dist_threshold=200
+                ):
+
+    if not isinstance(detections, list):
+        detections = [detections]
+
+    if not isinstance(references, list):
+        references = [references]
+
+    for detection in detections:
+        detection['x'] = detection['geometry'].x
+        detection['y'] = detection['geometry'].y
+
+    for reference in references:
+        reference['x'] = reference['geometry'].x
+        reference['y'] = reference['geometry'].y
+
+    # FAST SEARCH STRUCTURE
+    sear_points = [np.array(reference[['x', 'y']]) for reference in references]
+    proc_points = [np.array(detection[['x', 'y']])  for detection in detections]
+
+    kds = [cKDTree(search) for search in sear_points]    
+    
+    # ITERATIVE CLOSEST POINT STRUCTURES
+    reprojected_points    = []
+    compounded_homography = np.eye(3)
+    plotting_points = []
+    weight_vecs = []
+    
+    # OUTPUT STRUCTURES
+    transforms, grades = [], []
+    idx = None    
+
+    # ITERATE
+    for i in tqdm(range(icp_iterations), disable=False):
+        
+        curr_proc_points, to_points, weight_vec, idx = getClosestPoints(kds, proc_points, sear_points, weights=weights, proc_limit=proc_limit, idx=idx, dist_threshold=200)
+        
+
+        # TAKE ADJUSTMENT STEP
+        new_homography = adjustStep_affine_weighted(curr_proc_points, to_points,
+                                        shear=shear, 
+                                        rotation=rotation, 
+                                        perspective=perspective, 
+                                        rotation_limit=rotation_limit, 
+                                        weights=weight_vec)        
+        
+        transform = new_homography.copy()
+
+        def applyTransformWeighted(transform, points):
+            return [applyTransform(transform, p) for p in points]
+
+        # APPLY TRANSFORM TO ALL POINTS
+        proc_points = applyTransformWeighted(transform, proc_points)
+
+        # COMPOUND TRANSFORMATION
+        compounded_homography = compounded_homography @ transform
+        
+        # APPLY TRANSFORM FROM ADJUSTMENT TO PROCESSING POINTS AND APPEND TO LIST
+        curr_proc_points_rep = applyTransform(transform, curr_proc_points)
+        reprojected_points.append(curr_proc_points_rep)
+
+        # PUT ON OUTPUT STRUCTURES
+        transforms.append(compounded_homography)
+        weight_vecs.append(weight_vec)
+        
+        
+        def gradeWeightedFitFullDatasets(kdtrees, proc_points, transform, weights=weights, dist_threshold=None):
+            grade = 0
+            for i, kdtree in enumerate(kdtrees):
+                curr_points = applyTransform(transform, proc_points[i])
+                dist, _ = kdtree.query(curr_points)
+                if dist_threshold is not None:
+                    dist = dist[dist < dist_threshold]
+                grade = grade + np.sqrt(np.sum((dist * weights[i]) ** 2) / dist.shape[0])
+            return grade
+        
+        curr_grade = gradeWeightedFitFullDatasets(kds, proc_points, compounded_homography, weights=weights, dist_threshold=dist_threshold)
+        grades.append(curr_grade)
+
+        if debug and i % 10 == 0:
+            scale  = np.sqrt((new_homography[0, 0] ** 2 + new_homography[1, 1] ** 2) / 2)
+            offset = np.sqrt((new_homography[1, 2] ** 2 + new_homography[0, 2] ** 2) / 2)
+            print(f"Scale: {scale:.2f} Offset: {offset:.2f} Grades: {curr_grade}")
+            print(compounded_homography)
+
+    # GET BEST TRANSFORMS
+    best_transform = transforms[np.argmin(grades)]
+    best_points    = reprojected_points[np.argmin(grades)]
+    
+    if debug:
+        plt.plot(range(len(grades)), grades)
+        plt.scatter(np.argmin(grades), grades[np.argmin(grades)])
+        plt.show()
+    
+    if plot:
+        # fig, ax = plotICP_streets(reprojected_points, initial=initial, plot_skip=5, best=best_points)
+        fig, ax = plotWeightedICP(reprojected_points, ref_gdfs=plot_datasets, plot_skip=5, best=best_points, weights=weight_vecs)
+        if save_fig:
+            fig.savefig(save_fig)
+        plt.show()
+    
+    transform_dict = {
+        "reproj"  : reprojected_points,
+        "best"    : best_transform,
+        "list"    : transforms,
+        "grades"  : grades
+    }
+
+    return best_transform, transform_dict
+
+def plotWeightedICP(reprojected_points, ref_gdfs=[], plot_skip=2, best=None, weights=None, s_base=0.5):
+    icp_iterations = len(reprojected_points)
+    fig, ax = plt.subplots()
+    colormap = plt.get_cmap('cool') 
+    
+    if weights is None:
+        weights = np.ones(reprojected_points.shape[0])
+
+    for gdf in ref_gdfs:
+        gdf.plot(ax=ax, markersize=2, marker='x', linewidth=0.5)
+
+    for i in np.arange(plot_skip, icp_iterations, plot_skip):
+        ax.scatter(reprojected_points[i][:, 0], reprojected_points[i][:, 1], 
+            color=colormap(i / icp_iterations), s=weights[i]*s_base, label=f"Iteration {i}")
+
+    if best is not None:
+        ax.scatter(best[:, 0], best[:, 1], color='red', s=1, marker='x', label="Best Fit")
+        
+    ax.legend()
+    ax.grid()
+    ax.axis("equal")
+    return fig, ax
+
+def getRoadPoints(gdf, distance):
+    """
+    GENERATED WITH CHATGPT
+    Interpolate points along the LineString geometries at every `distance` interval.
+    
+    Parameters:
+    gdf (GeoDataFrame): A GeoDataFrame containing LineString geometries.
+    distance (float): The distance interval at which to interpolate points.
+    
+    Returns:
+    GeoDataFrame: A GeoDataFrame with the interpolated Point geometries.
+    """
+    points = []
+
+    # Efficiently process LineStrings only
+    for line in gdf.geometry:
+        if line.geom_type == 'LineString':
+            num_points = int(line.length // distance) + 1
+            distances = [i * distance for i in range(num_points)]
+            points.extend([line.interpolate(d) for d in distances])
+
+    # Create a new GeoDataFrame with Point geometries
+    points_gdf = gpd.GeoDataFrame(geometry=points, crs=gdf.crs)
+    
+    return points_gdf
+
+def bboxTransformToCRS(transform, image):
+    rev_y_axis = np.array([[1, 0, 0],
+                        [0,-1, 0],
+                        [0, 0, 1]])
+    
+    translation = np.eye(3)
+    translation[1, 2] = image.shape[0]
+
+    return transform @ translation @ rev_y_axis
+
+
+def bbox_to_coords_realworld(bbox):
+    # BOUNDING BOX 
+
+    x_min, y_min, x_max, y_max = bbox
+
+    xs = [x_min, x_min, x_max, x_max]
+    ys = [y_max, y_min, y_min, y_max]
+    return xs, ys
+
+def bbox_to_coords_raster(bbox):
+    # BOUNDING BOX 
+
+    x_min, y_min, x_max, y_max = bbox
+
+    xs = [x_min, x_min, x_max, x_max]
+    ys = [y_min, y_max, y_max, y_min]
+    return xs, ys
