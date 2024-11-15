@@ -2,6 +2,7 @@ import numpy as np
 import geopandas as gpd
 from scipy.spatial import KDTree
 from tqdm.autonotebook import tqdm
+from concurrent.futures import ThreadPoolExecutor
 
 import contextily as cx
 
@@ -18,7 +19,124 @@ def calculate_azimuths(points, target):
     azimuths = np.degrees(np.arctan2(dy, dx)) % 360
     return azimuths
 
-def azimuthDescriptors(coords, angle_step=30, start_angle=None, search_radius=50, overlap=True):
+def azimuthDescriptors(coords, angle_step=30, start_angle=None, search_radius=[50], overlap=True):
+    divisor = 1 if overlap else 2
+
+    if not isinstance(search_radius, list):
+        search_radius = [search_radius]
+
+    if start_angle is None:
+        azimuth_ranges = [(i - angle_step / 2, i + angle_step / 2) for i in np.arange(0, 360, angle_step // divisor)]
+    else:
+        azimuth_ranges = [(i, i + angle_step) for i in np.arange(start_angle, start_angle + 360, angle_step // divisor)]
+
+    kdtree = KDTree(coords)  # Build KDTree once
+
+    def process_point(point):
+        point_results = []
+        for radius in search_radius:
+            # Get neighbors within current radius
+            indices = kdtree.query_ball_point(point, r=radius)
+            if len(indices) == 0:
+                # If no neighbors within radius, store default value and continue
+                point_results.extend([-1] * len(azimuth_ranges))
+                continue
+            
+            neighbor_coords = coords[indices]
+            azimuths = calculate_azimuths(neighbor_coords, point)
+            distances = np.linalg.norm(neighbor_coords - point, axis=1)
+
+            radius_results = []
+            for min_az, max_az in azimuth_ranges:
+                mask = (azimuths >= min_az) & (azimuths <= max_az)
+                filtered_distances = distances[mask]
+
+                if filtered_distances.size > 0:
+                    radius_results.append(np.mean(filtered_distances))
+                else:
+                    radius_results.append(-1 * radius)
+
+            # Normalize and append radius results
+            radius_results = 1 - np.array(radius_results) / radius
+            point_results.extend(radius_results)
+
+        return point_results
+
+    # Parallel processing
+    with ThreadPoolExecutor() as executor:
+        results = list(tqdm(executor.map(process_point, coords), total=len(coords), leave=False))
+
+    return np.array(results)  # Ensure output is array for consistent structu
+
+def calcDescriptors(gdf, angle_step, azimuth_radius, overlap=True):
+    # GET COORDINATES
+    coords = getCoordsGDF(gdf) # np.vstack((np.array(gdf.geometry.x), np.array(gdf.geometry.y))).T
+
+    # AZIMUTH DESACRIPTORS
+    azimuth_distances = azimuthDescriptors(coords, angle_step=angle_step, search_radius=azimuth_radius, overlap=overlap)
+
+    # SAVE DESCRIPTORS
+    gdf[['descriptors' + str(i) for i in range(np.array(azimuth_distances).shape[1])]] = np.array(azimuth_distances)
+    return gdf, np.array(azimuth_distances)
+
+"""
+def azimuthDescriptors(coords, angle_step=30, start_angle=None, search_radii=[50], overlap=True):
+
+    if not isinstance(search_radii, list):
+        search_radii = [search_radii]
+
+    divisor = 1 if overlap else 2
+
+    if start_angle is None:
+        azimuth_ranges = [(i - angle_step / 2, i + angle_step / 2) for i in np.arange(0, 360, angle_step // divisor)]
+    else:
+        azimuth_ranges = [(i, i + angle_step) for i in np.arange(start_angle, start_angle + 360, angle_step // divisor)]
+
+    kdtree = KDTree(coords)  # Build KDTree once
+    max_radius = max(search_radii)  # Largest radius for a single KDTree query
+
+    def process_point(point):
+        point_results = []
+
+        # Get points within the max search radius only once
+        indices = kdtree.query_ball_point(point, r=max_radius)
+        neighbor_coords = coords[indices]
+
+        # Calculate azimuths and distances once
+        azimuths = calculate_azimuths(neighbor_coords, point)
+        distances = np.linalg.norm(neighbor_coords - point, axis=1)
+
+        for radius in search_radii:
+            # Filter neighbors within the current radius
+            mask_radius = distances <= radius
+            radius_neighbors = neighbor_coords[mask_radius]
+            radius_distances = distances[mask_radius]
+            radius_azimuths = azimuths[mask_radius]
+
+            radius_results = []
+            for min_az, max_az in azimuth_ranges:
+                # Filter based on azimuth range
+                mask_az = (radius_azimuths >= min_az) & (radius_azimuths <= max_az)
+                filtered_distances = radius_distances[mask_az]
+
+                if filtered_distances.size > 0:
+                    radius_results.append(np.mean(filtered_distances))
+                else:
+                    radius_results.append(-1 * radius)
+
+            # Normalize radius results and append
+            radius_results = 1 - np.array(radius_results) / radius
+            point_results.extend(radius_results)
+
+        return point_results
+
+    # Use parallel processing to speed up processing of each point
+    with ThreadPoolExecutor() as executor:
+        results = list(tqdm(executor.map(process_point, coords), total=len(coords), leave=False))
+
+    return results"""
+
+def azimuthDescriptors_old(coords, angle_step=30, start_angle=None, search_radius=50, overlap=True):
 
     divisor = 1 if overlap else 2
 
@@ -209,26 +327,6 @@ def get_non_outlier_indices(data, threshold=2):
     # Return indices of non-outliers
     return np.where(non_outliers)[0]
 
-# match_descriptors_within_distance(reference_descriptors, target_descriptors, reference_coords, target_coords, 
-#                       ratio_threshold=0.75, dist_thresh=2, pixel_dist_thresh=50)
-
-"""def tryMatchingWithParams(angle_step=10, search_radius=2000, ratio_threshold=0.8):
-    # ALL STREETS AZIMUTHS (ONLY NEED TO DO ONCE AND SAVE)
-    coords = np.vstack((np.array(corners_curr.geometry.x), np.array(corners_curr.geometry.y))).T
-    azimuth_distances = azimuthDescriptors(coords, angle_step=angle_step, search_radius=search_radius, overlap=True)
-    descriptors_curr = np.array(azimuth_distances)
-
-    corners_curr[['descriptors' + str(i) for i in range(np.array(azimuth_distances).shape[1])]] = np.array(azimuth_distances)
-
-    # ALL STREETS AZIMUTHS (ONLY NEED TO DO ONCE AND SAVE)
-    coords = np.vstack((np.array(corner_gdf.geometry.x), np.array(corner_gdf.geometry.y))).T
-    azimuth_distances_curr = azimuthDescriptors(coords, angle_step=angle_step, search_radius=search_radius, overlap=True)
-
-    corner_gdf[['descriptors' + str(i) for i in  range(np.array(azimuth_distances_curr).shape[1])]] = np.array(azimuth_distances_curr)
-
-    out = match_descriptors( np.array(azimuth_distances_curr), np.array(azimuth_distances), ratio_threshold=ratio_threshold)
-
-    return out, descriptors_curr, corner_gdf, corners, corners_curr"""
 
 def getDescriptors(gdf):
     # Filter columns that start with 'descriptors' and sort them
@@ -257,7 +355,7 @@ def calcDescriptors(gdf, angle_step, azimuth_radius, overlap=True):
     gdf[['descriptors' + str(i) for i in range(np.array(azimuth_distances).shape[1])]] = np.array(azimuth_distances)
     return gdf, np.array(azimuth_distances)
 
-def matching(tar_dataset, ref_dataset, angle_step=10, azimuth_radius=2000, ratio_threshold=0.8):
+def matching(tar_dataset, ref_dataset, angle_step=10, azimuth_radius=2000, ratio_threshold=0.8, num_retries=10, loosening_factor=0.01):
 
     # ALL STREETS AZIMUTHS
     ref_descriptors = getDescriptors(ref_dataset)
@@ -270,10 +368,19 @@ def matching(tar_dataset, ref_dataset, angle_step=10, azimuth_radius=2000, ratio
 
     out = match_descriptors(tar_descriptors, ref_descriptors, ratio_threshold=ratio_threshold)
 
+    counter = 0
+    while len(out) < 0.1 * tar_dataset.shape[0]:
+        print(f"Couldn't find with initial match params, rematching iteration {counter}; {len(out)} {tar_dataset.shape[0]}")
+        counter = counter + 1
+        out = match_descriptors(tar_descriptors, ref_descriptors, ratio_threshold=ratio_threshold+ loosening_factor * counter)
+        if num_retries < counter:
+            break
+
+
     return out, tar_dataset, ref_dataset
 
 
-def matching_distances(tar_dataset, ref_dataset, angle_step=10, azimuth_radius=2000, ratio_threshold=0.8, match_radius=500):
+def matching_distances(tar_dataset, ref_dataset, angle_step=10, azimuth_radius=2000, ratio_threshold=0.8, match_radius=500, num_retries=10, loosening_factor=0.01):
 
     # ALL STREETS AZIMUTHS
     ref_descriptors = getDescriptors(ref_dataset)
@@ -288,10 +395,19 @@ def matching_distances(tar_dataset, ref_dataset, angle_step=10, azimuth_radius=2
     out = match_descriptors_within_distance(ref_descriptors, tar_descriptors, getCoordsGDF(ref_dataset), getCoordsGDF(tar_dataset),#  reference_coords, target_coords, 
                       ratio_threshold=ratio_threshold, pixel_dist_thresh=match_radius)
 
+    counter = 0
+    while len(out) < 3: # 0.1 * tar_dataset.shape[0]:
+        print(f"Couldn't find with initial match params, rematching iteration {counter}; {len(out)} {tar_dataset.shape[0]}")
+        counter = counter + 1
+        out = match_descriptors_within_distance(ref_descriptors, tar_descriptors, getCoordsGDF(ref_dataset), getCoordsGDF(tar_dataset),#  reference_coords, target_coords, 
+                      ratio_threshold=ratio_threshold + loosening_factor * counter, pixel_dist_thresh=match_radius)
+        if num_retries < counter:
+            break
+
     return out, tar_dataset, ref_dataset
 
 def match_descriptors_within_distance(reference_descriptors, target_descriptors, reference_coords, target_coords, 
-                      ratio_threshold=0.75, dist_thresh=2, pixel_dist_thresh=500):
+                      ratio_threshold=0.75, dist_thresh=1e9, pixel_dist_thresh=500):
     """
     Matches descriptors using Euclidean distance, applies Lowe's ratio test,
     and finds the best match within a specified pixel distance threshold.
@@ -344,111 +460,6 @@ def match_descriptors_within_distance(reference_descriptors, target_descriptors,
     
     return matches
 
-"""
-def iterativeAdjustFromMatching(matchresults, corners_curr=None, idx=None, im_corner_gdf=None, plot=False, verbose=False):
-    if idx is None:
-        idx = np.arange(len(matchresults), dtype=np.int32)
-    
-    if len(matchresults[0]) > 4:
-        fromPoints = gpd.GeoDataFrame(geometry=gpd.points_from_xy([x[4][0] for x in matchresults], [x[4][1] for x in matchresults]))
-        toPoints   = gpd.GeoDataFrame(geometry=gpd.points_from_xy([x[5][0] for x in matchresults], [x[5][1] for x in matchresults]))
-    else:
-        fromPoints = np.vstack((np.array(corners_curr.iloc[np.array(matchresults)[idx, 1]].geometry.x), np.array(corners_curr.iloc[np.array(matchresults)[idx, 1]].geometry.y))).T
-        toPoints = np.vstack((np.array(im_corner_gdf.iloc[np.array(matchresults)[idx, 0]].geometry.x), np.array(im_corner_gdf.iloc[np.array(matchresults)[idx, 0]].geometry.y))).T
-        fromPoints = gpd.GeoDataFrame(geometry=gpd.points_from_xy(fromPoints[:, 0], fromPoints[:, 1]))
-        toPoints = gpd.GeoDataFrame(geometry=gpd.points_from_xy(toPoints[:, 0], toPoints[:, 1]))
-
-    if plot:
-        plotMatches(fromPoints, toPoints)
-
-    coordsA = getCoordsGDF(fromPoints)
-    coordsB = getCoordsGDF(toPoints)
-
-    coordsA, coordsB = normCoords(coordsA, coordsB)
-
-    checker = True
-    prev = np.where(idx)[0].shape[0]
-
-    while checker:
-        initial = affineTransformation(coordsA[idx, 0], coordsA[idx, 1], coordsB[idx, 0], coordsB[idx, 1],verbose=False)
-        matrix = initial.matrix        
-        coordsBprime = np.hstack((coordsB[idx], np.ones((coordsB[idx].shape[0], 1)))) @ np.linalg.inv(matrix).T
-        distances = np.sqrt((coordsBprime[:, 0] - coordsA[idx, 0]) ** 2 + (coordsBprime[:, 1] - coordsA[idx, 1]) ** 2)
-        uv = coordsB - coordsA
-        angles = np.degrees(np.arctan2(uv[:, 1], uv[:, 0]))
-        test = np.vstack((normArry(angles), normArry(np.sqrt(uv[:, 0] ** 2, uv[:, 1] ** 2 )))).T
-        test[np.isnan(test)] = 0
-        idx = most_popular_indices_2d(test, eps=0.01)
-
-        if np.where(idx)[0].shape[0] < prev:
-            prev = np.where(idx)[0].shape[0]
-        else: 
-            checker = False
-        
-        if verbose:
-
-            fig, axs = plt.subplots(1, 2)
-            axs[0].scatter(coordsA[idx, 0], coordsA[idx, 1], color='black')
-            axs[0].scatter(coordsB[idx, 0], coordsB[idx, 1])
-            axs[0].scatter(coordsBprime[:, 0], coordsBprime[:, 1], marker='x')
-            axs[1].hist(distances, bins=50)
-            plt.show()
-
-    return matrix, distances
-
-def registerImagesV1(ra,im_corner_gdf, corners_curr, corner_arry, descriptor_kwds, 
-                     r_initial=500, 
-                     verbose=1, 
-                     distance_threshold=3, 
-                     ):
-    compoundedAdjustment = np.eye(3)
-    flip=np.array([
-        [1, 0, 0],
-        [0, -1, 0],
-        [0, 0, 1]
-        ]) 
-    
-
-    for i in range(20):
-        
-        r_current = r_initial * 0.9 ** i
-
-        if i == 0:
-            matching_results, im_corner_gdf, corners_curr = matching(im_corner_gdf, corners_curr, ratio_threshold=0.8, **descriptor_kwds)
-            # return matching_results, im_corner_gdf, corners_curr
-            matrix, distances = iterativeAdjustFromMatching(matching_results, corners_curr=corners_curr, im_corner_gdf=im_corner_gdf, plot=verbose>3)
-        else:
-            matching_results, _, _ = matching_distances(im_corner_gdf_adj, corners_curr, match_radius=r_current, **descriptor_kwds)
-            matrix, distances = iterativeAdjustFromMatching(matching_results, plot=verbose>3)
-
-        compoundedAdjustment = np.linalg.inv(matrix) @ compoundedAdjustment 
-
-        rev_adj = compoundedAdjustment @ flip
-        current_adjustment = getMatrixFromAffine(ra.transform) @ flip @ rev_adj
-
-        reprojectedcorners = np.hstack((corner_arry, np.ones((corner_arry.shape[0], 1)))) @ current_adjustment.T
-
-        if verbose > 5:
-            print(rev_adj)
-
-        if verbose > 10:
-            plt.figure()
-            plt.scatter(reprojectedcorners[:, 0], reprojectedcorners[:, 1])
-            test = np.hstack((corner_arry, np.ones((corner_arry.shape[0], 1)))) @  getMatrixFromAffine(ra.transform).T
-            plt.scatter(test[:, 0], test[:, 1])
-            plt.show()
-
-        im_corner_gdf_adj = im_corner_gdf.copy()
-        im_corner_gdf_adj['geometry'] = gpd.points_from_xy(reprojectedcorners[:,0], reprojectedcorners[:, 1])
-        if verbose > 0:
-            print(np.nanpercentile(distances, [0, 25, 50, 75, 100]), len(matching_results))
-
-        if np.nanpercentile(distances, 50) < distance_threshold:
-            return current_adjustment        
-
-    return current_adjustment
-"""
-
 def calcQuiver(ax, fromGDF, toGDF, color="black"):
     fromcoords = np.vstack((np.array(fromGDF.geometry.x), np.array(fromGDF.geometry.y))).T
     tocoords = np.vstack((np.array(toGDF.geometry.x), np.array(toGDF.geometry.y))).T
@@ -457,28 +468,6 @@ def calcQuiver(ax, fromGDF, toGDF, color="black"):
     ax.quiver(fromcoords[:, 0], fromcoords[:, 1], uv[:, 0], uv[:, 1], angles='xy', color=color)
 
     return ax, uv
-"""
-def plotMatches(fromPoints, toPoints):
-    fig, axs = plt.subplots(1, 2, figsize=(15,5))
-
-    fromPoints.plot(ax=axs[0])
-    toPoints.plot(ax=axs[0])
-    axs[0], uv = calcQuiver(axs[0], fromPoints, toPoints, color="black")
-
-    cx.add_basemap(axs[0])
-
-    angles = np.degrees(np.arctan2(uv[:, 1], uv[:, 0]))
-    test = np.vstack((normArry(angles), normArry(np.sqrt(uv[:, 0] ** 2, uv[:, 1] ** 2 )))).T
-    idx = most_popular_indices_2d(test, eps=0.04)
-
-    axs[0], uv = calcQuiver(axs[0], fromPoints.iloc[idx], toPoints.iloc[idx], color="yellow")
-
-    bins = np.linspace(-180, 180, 100)
-
-    axs[1].hist(angles, bins)
-    axs[1].hist(angles[idx], bins)
-
-    return fig, axs, uv, idx"""
 
 def plotMatches(fromPoints, toPoints, dbscan_eps=0.04):
     fig, axs = plt.subplots(1, 2, figsize=(15,5))
@@ -487,7 +476,10 @@ def plotMatches(fromPoints, toPoints, dbscan_eps=0.04):
     toPoints.plot(ax=axs[0])
     axs[0], uv = calcQuiver(axs[0], fromPoints, toPoints, color="black")
 
-    cx.add_basemap(axs[0])
+    try:
+        cx.add_basemap(axs[0])
+    except:
+        print("Error adding Basemap")
 
     angles = np.degrees(np.arctan2(uv[:, 1], uv[:, 0]))
     test = np.vstack((normArry(angles), normArry(np.sqrt(uv[:, 0] ** 2, uv[:, 1] ** 2 )))).T

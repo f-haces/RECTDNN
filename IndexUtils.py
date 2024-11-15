@@ -47,7 +47,8 @@ def init_databases(ref_dir):
     global CIDs, counties, places
     CIDs     = pd.read_csv(f"{ref_dir}CountyCIDs.csv", index_col=0)
     counties = gpd.read_file(f"{ref_dir}Counties.shp", engine='pyogrio', use_arrow=True)
-    places   = gpd.read_file(f"{ref_dir}Places.shp", engine='pyogrio', use_arrow=True)
+    # places   = gpd.read_file(f"{ref_dir}Places.shp", engine='pyogrio', use_arrow=True)
+    places   = gpd.read_file(f"{ref_dir}Places_new.gpkg", engine='pyogrio', use_arrow=True)
 
     counties["GEOID"] = counties["GEOID"].astype(np.int32)
     places["GEOID"]   = places["GEOID"].astype(np.int32)
@@ -505,9 +506,9 @@ def gradeFit(pts1, kdtree):
     dist, _ = kdtree.query(pts1)
     return np.sqrt(np.sum(dist ** 2) / dist.shape[0])
 
-def performICPonIndex(boundaries, dnn_outputs,
+def performICPonIndex_ori(boundaries, dnn_outputs,
                debug=False, plot=True, icp_iterations=30,
-               rotation=True, shear=False, perspective=False,
+               rotation=True, shear=False, perspective=False, verbose=True
                ):
     '''
     ICP
@@ -571,7 +572,7 @@ def performICPonIndex(boundaries, dnn_outputs,
     transforms, grades = [], []
 
     # ITERATE
-    for i in tqdm(range(icp_iterations), disable=True):
+    for i in tqdm(range(icp_iterations), disable=not verbose, leave=False, desc="ICP Steps: "):
         
         _, nearest_indices = kdtree.query(proc_points)
         to_points = np.array([coords_ras_proc_bl[idx] for idx in nearest_indices])
@@ -579,6 +580,141 @@ def performICPonIndex(boundaries, dnn_outputs,
         # TAKE ADJUSTMENT STEP
         new_homography = adjustStep_affine(proc_points, coords_ras_proc_bl, kdtree,
                                         shear=shear, rotation=rotation, perspective=perspective)
+        
+        if debug:
+            fig, ax = plt.subplots()
+            ax.scatter(proc_points[:, 0], proc_points[:, 1])
+            ax.scatter(coords_ras_proc_bl[:, 0], coords_ras_proc_bl[:, 1])
+            ax.scatter(to_points[:, 0], to_points[:, 1])
+
+            for i in range(proc_points.shape[0]):
+                plt.plot([proc_points[i, 0], to_points[i, 0]],
+                         [proc_points[i, 1], to_points[i, 1]], 'ko', linestyle="--")
+            plt.show()
+        
+        transform = new_homography.copy()
+        
+        # APPLY TRANSFORM FROM ADJUSTMENT TO PROCESSING POINTS AND APPEND TO LIST
+        reprojected_points.append(applyTransform(transform, proc_points))
+
+        proc_points = applyTransform(transform, proc_points)
+        if debug:
+            plt.scatter(proc_points[:, 0], proc_points[:, 1])
+            plt.scatter(coords_ras_proc_bl[:, 0], coords_ras_proc_bl[:, 1])
+            plt.scatter(to_points[:, 0], to_points[:, 1])
+            plt.show()
+            
+        # COMPOUND TRANSFORMATION
+        compounded_homography = compounded_homography @ transform
+        
+        transforms.append(compounded_homography)
+        
+        grades.append(gradeFit(proc_points, kdtree))
+        
+        
+        if i % 1 == 0:
+            scale  = np.sqrt((new_homography[0, 0] ** 2 + new_homography[1, 1] ** 2) / 2)
+            offset = np.sqrt((new_homography[1, 2] ** 2 + new_homography[0, 2] ** 2) / 2)
+            # print(f"Scale: {scale:.2f} Offset: {offset:.2f}")
+    
+    best_transform = transforms[np.argmin(grades)]
+    best_points    = reprojected_points[np.argmin(grades)]
+    
+    if debug:
+        plt.plot(range(len(grades)), grades)
+        plt.scatter(np.argmin(grades), grades[np.argmin(grades)])
+        plt.show()
+
+    if plot:
+        plotICP(reprojected_points, initial_points, plot_skip=5, best=best_points)
+        plt.show()
+    
+    transform_dict = {
+        "initial" : original_homography,
+        "best"    : best_transform,
+        "list"    : transforms,
+        "grades"  : grades
+    }
+
+    return transform_dict
+
+def performICPonIndex(boundaries, dnn_outputs,
+               debug=False, plot=True, icp_iterations=30, proc_limit=1000,
+               rotation=True, shear=False, perspective=False, verbose=True
+               ):
+    '''
+    ICP
+    Input:
+        image_arry (np.array): Image
+        bounds_panels: 
+        shp_bounds:
+        output_image_fn:
+        dnn_outputs:
+    Output:
+        distances: Euclidean distances of the nearest neighbor
+        indices: dst indices of the nearest neighbor
+    '''
+
+    # INITIAL APPROXIMATE TRANSFORM BASED ON BOUNDS - FROM AND TO POINT DEFINITIONS BASED ON INPUTS
+    from_points = boundsToCV2Rect(boundaries["bounds_panels"])
+    to_points   = boundsToCV2Rect(boundaries["shp_bounds"])
+
+    # CALCULATE INITIAL TRANSFORM FROM BOUNDS
+    initial_transform = cv2.findHomography(from_points, to_points, cv2.RANSAC, 1000)
+    original_homography = initial_transform[0]
+    inverse_transform = np.linalg.inv(original_homography)
+
+    # CONVERT THINNED IMAGE TO POINTS
+    thin_image = getCountyBoundaryFromImage(dnn_outputs["countyArea"])
+    y, x = np.where(thin_image[::-1, :])                   # GET COORDINATES OF EVERY 
+    image_points = np.vstack((x, y, np.ones(x.shape)))     # STACK X, Y, AND Z COORDINATES
+    
+    # TRANSFORM SHAPEFILE POINTS INTO IMAGE COORDINATE SYSTEM
+    point_geometry = [[point.geometry.x, point.geometry.y, 1] for i, point in boundaries["point_boundary_gdf"].iterrows()]
+    point_geometry = inverse_transform @ np.array(point_geometry).T
+    
+    # COORDINATE HANDLING
+    coords_shp = point_geometry.T
+    coords_ras = np.vstack((image_points[0, :], image_points[1, :], np.ones(image_points[1, :].shape))).T
+    
+    # IMAGE ORIGIN COORDINATE SYSTEM TO IMAGE CENTER COORDINATE SYSTEM
+    offsets = np.min(coords_ras, axis=0)
+    x_offset, y_offset = offsets[0], offsets[1]
+    coords_shp_proc_bl = np.vstack((coords_shp[:, 0] - x_offset, coords_shp[:, 1] - y_offset)).T
+    coords_ras_proc_bl = np.vstack((coords_ras[:, 0] - x_offset, coords_ras[:, 1] - y_offset)).T
+    initial_points = {"shp" : coords_shp_proc_bl, "ras" : coords_ras_proc_bl}
+    
+    if debug:
+        plt.scatter(coords_shp_proc_bl[:, 0], coords_shp_proc_bl[:, 1])
+        plt.scatter(coords_ras_proc_bl[:, 0], coords_ras_proc_bl[:, 1])
+        plt.show()
+    
+    # FAST SEARCH STRUCTURE
+    kdtree     = cKDTree(coords_ras_proc_bl)
+    
+    # ITERATIVE CLOSEST POINT
+    reprojected_points = []
+    compounded_homography = np.eye(3)
+    proc_points = coords_shp_proc_bl
+    
+    # TRANSFORMATION PARAMS
+    # rotation, shear, perspective = True, False, False
+
+    # OUTPUT STRUCTURES
+    transforms, grades = [], []
+
+    # ITERATE
+    for i in tqdm(range(icp_iterations), disable=not verbose, leave=False, desc="ICP Steps: "):
+        
+        if proc_points.shape[0] > proc_limit:
+            np.random.permutation(proc_points.shape[0])[:proc_limit]
+
+        _, nearest_indices = kdtree.query(proc_points)
+        to_points = np.array([coords_ras_proc_bl[ix] for ix in nearest_indices])
+        
+        # TAKE ADJUSTMENT STEP
+        new_homography = adjustStep_affine(proc_points, coords_ras_proc_bl, kdtree,
+                                       shear=shear, rotation=rotation, perspective=perspective)
         
         if debug:
             fig, ax = plt.subplots()
@@ -852,12 +988,12 @@ def saveTiles(tiles, output_image_fn):
             continue
 
 
-def runTLNN(filename, TLNN=None):
+def runTLNN(filename, outputs_dir, TLNN=None):
     if TLNN is None:
         TLNN = {
             "tile"      : {"model" : None, "keyed_text" : True,  "model_weights" : f"{data_dir}BBNN/TileBBNN.pt"}, 
             "county"    : {"model" : None, "keyed_text" : False, "model_weights" : f"{data_dir}BBNN/CountyBBNN.pt"}, 
-            "legend"    : {"model" : None, "keyed_text" : False, "model_weights" : f"{data_dir}BBNN/LegendBBNN.pt"}}
+            "legend"    : {"model" : None, "keyed_text" : False, "model_weights" : f"{data_dir}BBNN/LegendBBNN.pt"},}
         
     outputs = {}
 

@@ -136,7 +136,112 @@ class Blur_Regions(object):
         image_blurred = Image.blend(mask, image.filter(ImageFilter.GaussianBlur(radius=sigma)), 0.5)
         image = Image.blend(image_blurred, image, 0.5)
         return image
-    
+
+
+class NN_MulticlassV2(Dataset):
+    def __init__(self, input_folder, target_folder, 
+                 transform=None, 
+                 input_only_transform=None,
+                 crop=True, 
+                 n_pyramids=0,
+                 resize=False, 
+                 only_true=False, 
+                 resize_def=2048, 
+                 flip_outputs=False,
+                 cropsize=512, 
+                 inchannels=None
+                 ):
+        
+        self.input_folder = input_folder
+        self.target_folder = target_folder         
+        self.transform = transform
+        self.crop = crop
+        self.cropsize = cropsize
+        self.image_filenames = os.listdir(input_folder)
+        self.n_pyramids = n_pyramids
+        self.images_unscaled = list()        
+        self.onlytrueoutputs = only_true
+        self.input_transform = input_only_transform
+        self.tensor = transforms.Compose([transforms.ToTensor()])
+        self.simpleCrop = transforms.Compose([transforms.RandomCrop((self.cropsize, self.cropsize))])
+        self.inchannels = inchannels
+        
+        for fn in self.image_filenames:
+            image = Image.open(os.path.join(self.input_folder, fn)).convert('L')
+            image = Image.fromarray(np.array(image).astype(np.uint8))
+            self.images_unscaled.append(image)
+                
+        self.targets_unscaled = loadClasses(self.target_folder, fns=self.image_filenames, flip=flip_outputs)
+        
+        if resize:            
+            self.images  = dynamic_resize(self.images_unscaled , (resize_def, resize_def))
+            self.targets = dynamic_resize(self.targets_unscaled, (resize_def, resize_def))
+        else:
+            self.images  = self.images_unscaled
+            self.targets = self.targets_unscaled
+        
+        
+    def __len__(self):
+        return len(self.image_filenames)
+
+    def __getitem__(self, index):
+        # input_path = os.path.join(self.input_folder, self.image_filenames[index])
+        
+        input_image  = self.images[index]        
+        target_image = self.targets[index]
+        
+        # Apply the same random transformation to both image
+        seed = np.random.randint(2147483647)            
+        if self.transform is not None:
+            
+            random.seed(seed)
+            torch.manual_seed(seed)
+            input_image = self.transform(input_image)            
+            random.seed(seed)
+            torch.manual_seed(seed)
+
+            target_image = self.transform(target_image)
+            """ if np.max(np.asarray(target_image)) == 255:
+                target_image = self.transform(target_image)
+            else:
+                target_image = self.transform(target_image)"""
+            
+        if self.input_transform is not None:
+            input_image = self.input_transform(input_image)
+            
+        if not isinstance(input_image, torch.Tensor):
+            input_image  = self.tensor(input_image)
+            
+        if not isinstance(target_image, torch.Tensor):
+            target_image = self.tensor(target_image)
+            
+        if self.crop:
+            sample = {'image': input_image, 'target': target_image}
+            if self.n_pyramids > 0:
+                croptrans = transforms.Compose([RandomPyramidCrop((self.cropsize, self.cropsize), self.n_pyramids)])
+                sample_transformed = croptrans(sample)
+                input_image, target_image = sample_transformed['image'], sample_transformed['target']
+            else:
+                # croptrans = transforms.Compose([RandomCrop((self.cropsize, self.cropsize))])
+                input_image = self.simpleCrop(input_image)
+                target_image= self.simpleCrop(target_image)
+                # input_image, target_image = sample_transformed['image'], sample_transformed['target']
+        
+        target_image = target_image.to(torch.long).squeeze()
+        
+        if self.onlytrueoutputs:
+            mask = (input_image[0, :, :] < 0.5).squeeze()
+            target_image = np.where(mask, target_image, 0)
+            # for channel in range(target_image.shape[0]):
+            #    target_image[channel, :, :] = np.where(mask, target_image[channel, :, :], 0)
+        
+        if self.inchannels is not None:
+            input_image = input_image.repeat(self.inchannels, 1, 1)
+
+        return input_image.float(), target_image, self.image_filenames[index]    
+
+
+
 class NN_Multiclass(Dataset):
     def __init__(self, input_folder, target_folder, 
                  transform=None, 
@@ -194,10 +299,12 @@ class NN_Multiclass(Dataset):
             input_image = self.transform(input_image)            
             random.seed(seed)
             torch.manual_seed(seed)
-            if np.max(np.asarray(target_image)) == 255:
+
+            target_image = self.transform(target_image)
+            """ if np.max(np.asarray(target_image)) == 255:
                 target_image = self.transform(target_image)
             else:
-                target_image = self.transform(target_image)
+                target_image = self.transform(target_image)"""
             
         if self.input_transform is not None:
             input_image = self.input_transform(input_image)
@@ -212,7 +319,7 @@ class NN_Multiclass(Dataset):
             sample = {'image': input_image, 'target': target_image}
             if self.n_pyramids > 0:
                 croptrans = transforms.Compose([RandomPyramidCrop((self.cropsize, self.cropsize), self.n_pyramids)])
-                sample_transformed = croptrans(sample)
+                sample_trnasformed = croptrans(sample)
                 input_image, target_image = sample_transformed['image'], sample_transformed['target']
             else:
                 croptrans = transforms.Compose([RandomCrop((self.cropsize, self.cropsize))])

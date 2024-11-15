@@ -21,6 +21,12 @@ import matplotlib.pyplot as plt
 from IndexUtils import * 
 from WorldFileUtils import * 
 
+# TILED INFERENCE
+import sahi
+from sahi import AutoDetectionModel
+from sahi.predict import get_sliced_prediction, predict
+sahi.utils.cv.IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.tiff', '.bmp', '.tif']
+
 Image.MAX_IMAGE_PIXELS = 933120000
 warnings.filterwarnings("ignore")
 initialize = False
@@ -112,6 +118,7 @@ def getIndivDict(a, index):
         out.append({'tile' : k, 'index' : index, 'coords' : v['coords'], })
     return out
 
+"""
 def findBounds(image_fn, model=None, 
         model_weights=f"{data_dir}RLNN/weights050124.pt",
         creation_params=None,
@@ -148,6 +155,7 @@ def findBounds(image_fn, model=None,
         model   = model.to("cpu")
 
     return results, model
+"""
 
 def bbox_to_polygon(bbox):
     # Function to convert [left, bottom, right, top] to a shapely Polygon
@@ -1322,3 +1330,84 @@ def bbox_to_coords_raster(bbox):
     xs = [x_min, x_min, x_max, x_max]
     ys = [y_min, y_max, y_max, y_min]
     return xs, ys
+
+
+def processHalfSize(tiles, half_path):
+    processing_images=[]
+    for tile in tqdm(tiles):
+        half_out_fn = os.path.join(half_path, os.path.basename(tile))
+        processing_images.append(half_out_fn)
+        if not os.path.exists(half_out_fn):
+            a    = cv2.imread(tile)
+            half = cv2.resize(a,  (0, 0), fx=0.5, fy=0.5)
+            cv2.imwrite(half_out_fn, half)
+
+def processSAHIresults(yolo_path, streetcorner_out_fn):
+    def get_largest_subdirectory(base_dir):
+        subdirs = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
+        numbered_subdirs = [(d, int(d.replace('exp', ''))) for d in subdirs if d.startswith('exp') and d[3:].isdigit()]
+        largest_subdir = max(numbered_subdirs, key=lambda x: x[1])[0] if numbered_subdirs else None
+        return os.path.join(base_dir, largest_subdir)
+
+    pkldir    = os.path.join(get_largest_subdirectory(yolo_path), "pickles\\")
+    print(f"Reading results from: {pkldir}" )
+
+    pkl_files = glob.glob(pkldir + "*")
+
+    streetcorner_dict = {}
+
+    for pkl in pkl_files:
+        with open(pkl, 'rb') as f:
+            x = pickle.load(f)
+
+        streetcorner_dict[os.path.basename(pkl).split(".")[0]] = np.array([calcCenter(a.bbox.to_xyxy()) for a in x])
+
+    pickle.dump(streetcorner_dict, open(streetcorner_out_fn, "wb" ) )
+
+    return streetcorner_dict
+    
+
+def processTiledYOLOs(tiles, model_paths, out_dict_names, proc_dir, imsizes):
+
+    print("Making images half size for tiled inference")
+    half_path = os.path.join(proc_dir, "half_size")
+    os.makedirs(half_path, exist_ok=True)
+    processHalfSize(tiles, half_path)
+    
+    out_dicts = []
+
+    for i, model_path in enumerate(model_paths): 
+
+        yolo_path = os.path.join(proc_dir, out_dict_names[i])
+        os.makedirs(yolo_path, exist_ok=True)
+
+        out_fn = os.path.join(proc_dir, f"{out_dict_names[i]}.pkl")
+        
+        if not os.path.exists(out_fn):
+            
+            detection_model = AutoDetectionModel.from_pretrained(
+                model_type="yolov8",
+                model_path=model_path,
+                confidence_threshold=0.001,
+                device="cuda",  # or 'cuda:0'
+            )
+            
+            result = predict(source=half_path,
+                            detection_model=detection_model, 
+                            verbose=0, 
+                            project=yolo_path,
+                            slice_height=imsizes[i], 
+                            slice_width=imsizes[i], 
+                            model_device="cuda", 
+                            return_dict=True, 
+                            export_pickle=True,
+                            visual_hide_labels=True)
+            
+            curr_dict = processSAHIresults(yolo_path, out_fn)
+        else:
+            print(f"Reading from {out_fn}")
+            curr_dict = pickle.load(open(out_fn, "rb"))
+
+        out_dicts.append(curr_dict)
+    
+    return out_dicts
