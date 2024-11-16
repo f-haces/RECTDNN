@@ -14,6 +14,7 @@ from rapidfuzz.fuzz import partial_ratio_alignment
 # CUSTOM UTILITIES
 from IndexUtils import * 
 from TileUtils import *
+from ReadDate import extractDate
 
 # TILED INFERENCE
 import sahi

@@ -495,3 +495,102 @@ def plotMatches(fromPoints, toPoints, dbscan_eps=0.04):
     axs[1].set_ylabel("Frequency (n)")
 
     return fig, axs, uv, idx
+
+
+def matching_distances_loosen_distance(tar_dataset, ref_dataset, angle_step=10, azimuth_radius=2000, ratio_threshold=0.8, match_radius=2000, num_retries=10, loosening_factor=0.25):
+
+    # ALL STREETS AZIMUTHS
+    ref_descriptors = getDescriptors(ref_dataset)
+
+    # IF WE HAVEN'T CALCULATED THEM BEFORE
+    if ref_descriptors is None:
+        ref_dataset, ref_descriptors = calcDescriptors(ref_dataset, angle_step, azimuth_radius, overlap=True)
+
+    tar_dataset, tar_descriptors = calcDescriptors(tar_dataset, angle_step, azimuth_radius, overlap=True)
+
+    # out = match_descriptors(tar_descriptors, ref_descriptors, ratio_threshold=ratio_threshold)
+    out = match_descriptors_within_distance(ref_descriptors, tar_descriptors, getCoordsGDF(ref_dataset), getCoordsGDF(tar_dataset),#  reference_coords, target_coords, 
+                      ratio_threshold=ratio_threshold, pixel_dist_thresh=match_radius, dist_thresh=4)
+
+    counter = 0
+    while len(out) < 3: # 0.1 * tar_dataset.shape[0]:
+        counter = counter + 1
+        print(f"Couldn't find with initial match params, rematching iteration {counter} with radius {match_radius + counter*match_radius*loosening_factor}; Currently {len(out)} matches, expecting {0.1 * tar_dataset.shape[0]}")
+        
+        out = match_descriptors_within_distance(ref_descriptors, tar_descriptors, getCoordsGDF(ref_dataset), getCoordsGDF(tar_dataset), 
+                                                pixel_dist_thresh=match_radius + counter*match_radius*loosening_factor, ratio_threshold=0.95)
+        if num_retries < counter:
+            break
+
+    return out, tar_dataset, ref_dataset
+
+def iterativeAdjustFromMatching(matchresults, corners_curr=None, idx=None, im_corner_gdf=None, plot=False, verbose=False, dbscan_eps=0.04):
+    if idx is None:
+        idx = np.arange(len(matchresults), dtype=np.int32)
+    
+    if len(matchresults[0]) > 4:
+        fromPoints = gpd.GeoDataFrame(geometry=gpd.points_from_xy([x[4][0] for x in matchresults], [x[4][1] for x in matchresults]))
+        toPoints   = gpd.GeoDataFrame(geometry=gpd.points_from_xy([x[5][0] for x in matchresults], [x[5][1] for x in matchresults]))
+    else:
+        fromPoints = np.vstack((np.array(corners_curr.iloc[np.array(matchresults)[idx, 1]].geometry.x), np.array(corners_curr.iloc[np.array(matchresults)[idx, 1]].geometry.y))).T
+        toPoints = np.vstack((np.array(im_corner_gdf.iloc[np.array(matchresults)[idx, 0]].geometry.x), np.array(im_corner_gdf.iloc[np.array(matchresults)[idx, 0]].geometry.y))).T
+        fromPoints = gpd.GeoDataFrame(geometry=gpd.points_from_xy(fromPoints[:, 0], fromPoints[:, 1]))
+        toPoints = gpd.GeoDataFrame(geometry=gpd.points_from_xy(toPoints[:, 0], toPoints[:, 1]))
+
+    coordsA = getCoordsGDF(fromPoints)
+    coordsB = getCoordsGDF(toPoints)
+
+    coordsA, coordsB = normCoords(coordsA, coordsB)
+
+    i = 0
+
+    checker = True
+    prev = np.where(idx)[0].shape[0]
+
+    if plot:
+        plotMatches(fromPoints, toPoints, dbscan_eps=dbscan_eps)
+    while checker:
+        initial = affineTransformation(coordsA[idx, 0], coordsA[idx, 1], coordsB[idx, 0], coordsB[idx, 1],verbose=False, )
+        matrix = initial.matrix        
+        coordsBprime = np.hstack((coordsB[idx], np.ones((coordsB[idx].shape[0], 1)))) @ np.linalg.inv(matrix).T
+
+
+        distances = np.sqrt((coordsBprime[:, 0] - coordsA[idx, 0]) ** 2 + (coordsBprime[:, 1] - coordsA[idx, 1]) ** 2)
+        uv = coordsB - coordsA
+        angles = np.degrees(np.arctan2(uv[:, 1], uv[:, 0]))
+        test = np.vstack((normArry(angles), normArry(np.sqrt(uv[:, 0] ** 2, uv[:, 1] ** 2 )))).T
+        test[np.isnan(test)] = 0
+        idx = most_popular_indices_2d(test, eps=dbscan_eps)
+
+        counter = 0
+        if np.where(idx)[0].shape[0] < 5:
+            print("Loosening, under 5... ", end=" ")
+            while np.where(idx)[0].shape[0] < 5:
+                counter = counter + 1
+                idx = most_popular_indices_2d(test, eps=dbscan_eps + 0.02 * counter)
+                if counter > 10:
+                    break
+            print(f"Loosened {counter} times at {dbscan_eps + 0.02 * counter}")
+        
+            
+
+        if np.where(idx)[0].shape[0] < prev:
+            prev = np.where(idx)[0].shape[0]
+        else: 
+            checker = False
+        
+        if verbose:
+            print(i)
+            print(np.linalg.inv(matrix).T)
+            fig, axs = plt.subplots(1, 2)
+            axs[0].scatter(coordsA[idx, 0], coordsA[idx, 1], color='black')
+            axs[0].scatter(coordsB[idx, 0], coordsB[idx, 1])
+            axs[0].scatter(coordsBprime[:, 0], coordsBprime[:, 1], marker='x')
+            axs[1].hist(distances, bins=50)
+            axs[1].set_title(f"Iteration {i}")
+            plt.show()
+
+        i = i + 1
+
+    return matrix, distances
+
