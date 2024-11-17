@@ -1,5 +1,5 @@
 # NOTEBOOK IMPORTS
-import os, glob, zipfile, random
+import os, glob, zipfile, random, traceback
 import numpy as np
 from tqdm.notebook import tqdm
 
@@ -7,25 +7,6 @@ from tqdm.notebook import tqdm
 # IMAGE IMPORTS
 import cv2
 from PIL import Image, ImageFilter
-
-'''
-from shutil import copyfile
-from datetime import datetime
-
-# GIS IMPORTS
-import fiona, pyproj
-from affine import Affine
-from shapely.geometry import shape, mapping, Point, LineString
-from shapely.ops import transform, nearest_points, snap
-import pandas as pd
-import geopandas as gpd
-import rasterio as rio
-from rasterio.mask import mask
-from scipy.spatial import cKDTree
-
-import torch.nn as nn
-import torch.optim as optim
-'''
 
 # NEURAL NETWORK
 import torch
@@ -36,12 +17,6 @@ from torchvision.transforms import RandomCrop
 # PLOTTING IMPORTS
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-
-# CUSTOM UTILITIES
-# from WorldFileUtils import *
-# from GeometryUtils import *
-# from icp import *
-# from DataUtils import *
 
 Image.MAX_IMAGE_PIXELS = 933120000
 
@@ -434,7 +409,9 @@ def loadClasses(folder_path, fns=None, flip=False):
     
     classes = np.unique(labels)
     outputs = list()
-    
+
+    warn_fuse = [True] * len(classes)
+
     for image_name in tqdm(list(image_names.keys())):
         output = None
         for i, classification in enumerate(classes):
@@ -442,12 +419,22 @@ def loadClasses(folder_path, fns=None, flip=False):
             fn = f"{folder_path}/{classification}/{image_name}"
             
             try:
-                current_image = cv2.imread(fn)
-                current_image = np.asarray(current_image)
-                
-                if current_image.ndim == 3:
-                    current_image = current_image[:, :, 0]
-                
+                if os.path.exists(fn):
+                    current_image = cv2.imread(fn)
+                    current_image = np.asarray(current_image)
+                    
+                    if current_image.ndim == 3:
+                        current_image = current_image[:, :, 0]
+                else:
+                    if warn_fuse[i]:
+                        print(f"Some error images in {classification}, trying to coerce")
+                        warn_fuse[i] = False
+                    try:
+                        current_image = np.zeros(output.shape)
+                    except:
+                        print(traceback.format_exc())
+                        raise(f"Could not coerce {fn}")
+                    
                 if output is None:
                     output = np.zeros(current_image.shape)
                 
@@ -644,7 +631,8 @@ def split_and_run_cnn(image, model, tilesize=2048,
             y_pad = y1 - y0
             
             # GET PYRAMIDS TO PROCESS IMAGE
-            tile = get_pyramid(image, x0, y0, n_pyramids, tilesize)
+            if n_pyramids > 0:
+                tile = get_pyramid(image, x0, y0, n_pyramids, tilesize)
             
             # TILE PREPROCESSING
             tile = np.array(tile)                               # AS NUMPY ARRAY

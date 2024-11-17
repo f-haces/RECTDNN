@@ -110,7 +110,7 @@ class TPNN(nn.Module):
         
         self.num_classes = num_classes
 
-        self.softmax = nn.Softmax()
+        self.softmax = nn.Softmax(dim=1)
         
         self.attention = SpatialAttention()
         
