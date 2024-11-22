@@ -34,7 +34,7 @@ from DataUtils import *
 Image.MAX_IMAGE_PIXELS = 933120000
 
 class NN_Dataset_V3(Dataset):
-    def __init__(self, image_dir, mask_dir, input_transform=None, transform=None):
+    def __init__(self, image_dir, mask_dir, input_transform=None, transform=None, resize=None):
         """
         Args:
             image_dir (str): Directory with all the images.
@@ -53,10 +53,15 @@ class NN_Dataset_V3(Dataset):
         self.masks = []
         for fn in self.image_names:
             image = Image.open(os.path.join(image_dir, fn)).convert('L')
+            if resize is not None:
+                image = cv2.resize(np.array(image).astype(np.uint8), (resize, resize), interpolation= cv2.INTER_AREA)            
             image = Image.fromarray(np.array(image).astype(np.uint8))
             self.images.append(image)
                 
         self.targets = loadClasses(mask_dir, fns=self.image_names, flip=False)
+
+        if resize is not None:
+            self.targets = [Image.fromarray(cv2.resize(np.array(im), (resize, resize), interpolation= cv2.INTER_AREA)) for im in self.targets]
         
     def __len__(self):
         return len(self.images)
@@ -84,13 +89,13 @@ class NN_Dataset_V3(Dataset):
 # In[3]:
 
 
-base_dir = r"/project/glennie/fhacesga/RECTDNN/FLNN/tiled_master_0.5/"
+base_dir = r"/project/glennie/fhacesga/RECTDNN/FLNN/general/AAA_NewDataset/"
 
 input_folder        = f"{base_dir}/in"
 val_folder          = f"{base_dir}/val"
 train_target_folder = f"{base_dir}/out"
 val_target_folder   = f"{base_dir}/val_out"
-batch_size          = 20
+batch_size          = 2
 verbose_level       = 2
 
 tensor = transforms.Compose([
@@ -98,23 +103,23 @@ tensor = transforms.Compose([
 ])
 
 transform = transforms.Compose([
-    transforms.RandomRotation(degrees=30),
+    transforms.RandomRotation(degrees=45),
     transforms.RandomHorizontalFlip(),
     transforms.RandomVerticalFlip(),
     transforms.ToTensor(),
 ])
 
 input_transform = transforms.RandomApply(torch.nn.ModuleList([
-    transforms.ColorJitter(0.05, 0.05, 0.05, 0.05),
+    transforms.ColorJitter(0.3, 0.3, 0.3, 0.3),
 ]), 0.5)
 
 tensor = transforms.Compose([transforms.ToTensor()])
 
 train_dataset = NN_Dataset_V3(input_folder, train_target_folder, transform=transform, 
-                              input_transform=input_transform)
+                              input_transform=input_transform, resize=1536)
 train_loader  = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
 val_dataset = NN_Dataset_V3(val_folder, val_target_folder, transform=transform, 
-                              input_transform=input_transform)
+                              input_transform=input_transform, resize=1536)
 val_loader  = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
 loaders = {'train' : train_loader, "test" : val_loader }
@@ -160,7 +165,7 @@ def train(model, dataloaders, num_epochs=50,
           learning_rate=5e-4,
           device = torch.device("cuda:0"),
           continue_from=None,
-          weights=[500, 1000, 1000]):
+          weights=[100, 1000]):
     
     # TRAINING PARAMETERS
     weights = torch.tensor(weights).float().to(device)
@@ -255,7 +260,7 @@ def train(model, dataloaders, num_epochs=50,
                     if phase is 'train':
                         epoch_loss[phase] += loss
                     else:
-                        epoch_loss[phase] += loss.detach().cpu().numpy()
+                        epoch_loss[phase] += loss.detach().cpu().numpy() / (len(repeats) + n_images)
                         
                     iou_list[phase].append(calculate_iou(outputs, labels).detach().cpu().numpy())
                     notify(f"Loss Calculated\t\t {torch.cuda.memory_allocated() / 1e6}")
@@ -274,12 +279,12 @@ def train(model, dataloaders, num_epochs=50,
                     # SAVE TRAINING IMAGES IF CURRENT STEP REQUIRES IT
                     
                     # if rep_id % 2 == 0 and rep_id != 0:
-                    if random.randrange(0,1000) < 2:
+                    if random.randrange(0,1000) < 10:
                         prob_img_or = outputs.detach().cpu()
                         minputs     = inputs.detach().cpu().numpy()
                         mlabels     = labels.detach().cpu().numpy()
                         saveImages(prob_img_or, outputs, filenames, minputs, outputs_folder, rep_id, mlabels)
-                        
+
                     # EMPTY CACHE
                     torch.cuda.empty_cache()
                     notify(f"Cache Emptied\t\t {torch.cuda.memory_allocated() / 1e6}")
@@ -290,17 +295,18 @@ def train(model, dataloaders, num_epochs=50,
             if phase is 'train':
                 epoch_loss[phase] = epoch_loss[phase].cpu().detach().numpy() / (len(repeats) + n_images)
             iou_list[phase]   = np.mean(np.vstack(iou_list[phase]), axis=0)
-        
+                
         # UPDATE LEARNING RATE SCHEDULER
         lr_list.append(learning_rate_scheduler.get_lr()[0])
         learning_rate_scheduler.step()
         
         # PLOT, FIRST BY TRANSFERING TO LISTS
+        message = f"Epoch {epoch}\t"
         for i in phases:
             epoch_losses[i].append(epoch_loss[i])
             iou_lists[i].append(iou_list[i])
-            notify(f"Epoch {epoch}\t {i} Loss: \t {epoch_loss[i]:.4e} IOUs: \t {iou_list[i][0]:.4e} \t {iou_list[i][1]:.4e}\t {iou_list[i][2]:.4e}", level=0)
-        
+            message = message + f"{i} Loss: \t {epoch_loss[i]:.4e} IOUs: \t {iou_list[i][0]:.4e} \t {iou_list[i][1]:.4e}\t"
+        notify(message, level=0)
         """
         update_plots([epoch_losses[i] for i in phases], [iou_lists[i] for i in phases], fig, axs, 
                      colors=["r", "g", "b", "k", "orange"]*2,
@@ -318,42 +324,14 @@ def train(model, dataloaders, num_epochs=50,
                 'iou_lists' : iou_lists,
                 'epoch_losses' : epoch_losses,
                 'lr_list' : lr_list
-            }, r'/project/glennie/fhacesga/RECTDNN/FLNN/checkpoint_111824_tiled_2.pth')
+            }, r'/project/glennie/fhacesga/RECTDNN/FLNN/checkpoint_112024_nontiled_1.pth')
             
-            torch.save(model, r"/project/glennie/fhacesga/RECTDNN/FLNN/111824_tiled_2.pth")
+            torch.save(model, r"/project/glennie/fhacesga/RECTDNN/FLNN/112024_nontiled_1.pth")
         
     return model
 
-
-class WrapperTPNN(nn.Module):
-    def __init__(self, tpnn_model, input_channels=1, target_channels=2):
-        """
-        A wrapper around the TPNN model that adapts single-channel input for the existing model.
-
-        Args:
-            tpnn_model (nn.Module): The pretrained TPNN model.
-            input_channels (int): Number of input channels (e.g., 1 for grayscale).
-            target_channels (int): Target number of channels for the adapted model.
-        """
-        super(WrapperTPNN, self).__init__()
-        self.tpnn = tpnn_model
-        
-        # Upchanneling layer to convert single-channel input to multi-channel
-        self.upchannel = nn.Conv2d(input_channels, target_channels, kernel_size=1)
-
-    def forward(self, x, resize=False):
-        # Upchannel the input
-        x = self.upchannel(x)
-        
-        # Pass through the original TPNN model
-        return self.tpnn(x, resize=resize)
-
-or_model = TPNN(num_classes=3, finalpadding=1, inputsize=2)
-checkpoint = torch.load(r"/project/glennie/fhacesga/RECTDNN/FLNN/checkpoint_021524.pth")
-or_model.load_state_dict(checkpoint['model_state_dict'])
-
-model = WrapperTPNN(or_model, input_channels=1, target_channels=2)
-
-model = train(model, loaders, num_epochs=5000, learning_rate=1e-5,
-             continue_from=r"/project/glennie/fhacesga/RECTDNN/FLNN/checkpoint_111824_tiled.pth")
+model = TPNN(num_classes=2, inputsize=1, verbose_level=verbose_level)
+model = train(model, loaders, num_epochs=5000, learning_rate=1e-4, 
+              continue_from= r'/project/glennie/fhacesga/RECTDNN/FLNN/checkpoint_112024_nontiled.pth'
+             )
 

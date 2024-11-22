@@ -384,7 +384,7 @@ def getClasses(dir):
     return classes
 
 def loadClasses(folder_path, fns=None, flip=False):
-    class_folders = os.listdir(folder_path)
+    class_folders = sorted(os.listdir(folder_path))
     labels = []
     image_names = {}
     
@@ -414,8 +414,11 @@ def loadClasses(folder_path, fns=None, flip=False):
 
     for image_name in tqdm(list(image_names.keys())):
         output = None
+        print(classes)
         for i, classification in enumerate(classes):
-            
+            print(folder_path)
+            print(classification)
+            print(image_name)
             fn = f"{folder_path}/{classification}/{image_name}"
             
             try:
