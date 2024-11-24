@@ -383,7 +383,96 @@ def getClasses(dir):
     classes.insert(0, "background")
     return classes
 
+
 def loadClasses(folder_path, fns=None, flip=False):
+    # Sort the class folders alphabetically
+    class_folders = sorted(os.listdir(folder_path))
+    print(class_folders)
+    labels = []
+    image_names = {}
+
+    # If filenames are provided (fns), filter images accordingly
+    if fns is not None:
+        # Ensure `fns` is a set for faster lookup
+        fns_set = set([os.path.basename(fn) for fn in fns])
+        # print(fns_set)
+        # Iterate over the class folders
+        for class_folder in class_folders:
+            class_folder_path = os.path.join(folder_path, class_folder)
+            # print(class_folder_path)
+            # print(os.path.isdir(class_folder_path))
+            if os.path.isdir(class_folder_path):
+                image_files = os.listdir(class_folder_path)
+                # print(image_files)
+                # Match filenames in `fns` regardless of their extensions
+                for file_name in image_files:
+                    # print(file_name)
+                    base_name = os.path.splitext(file_name)[0]  # Extract base name without extension
+                    if base_name in fns_set:
+                        image_names[file_name] = class_folder
+                        # print(image_names[file_name])
+                        labels.append(class_folder)
+    else:
+        # Load all available images in all class folders
+        for class_folder in class_folders:
+            class_folder_path = os.path.join(folder_path, class_folder)
+            print(class_folder_path)
+            if os.path.isdir(class_folder_path):
+                image_files = os.listdir(class_folder_path)
+                for file_name in image_files:
+                    image_names[file_name] = class_folder
+                    labels.append(class_folder)
+
+    # Get unique class names
+    classes = np.unique(labels)
+    outputs = []
+
+    # Warning flag for empty images
+    warn_fuse = [True] * len(classes)
+
+    print(classes)
+    
+    # Process each image
+    for image_name, class_folder in tqdm(image_names.items()):
+        output = None
+        fn = os.path.join(folder_path, class_folder, image_name)
+
+        print(class_folder)
+        print(fn)
+        
+        try:
+            if os.path.exists(fn):
+                current_image = cv2.imread(fn, cv2.IMREAD_GRAYSCALE)  # Load as grayscale
+                if current_image is None:
+                    raise ValueError(f"Failed to read image: {fn}")
+            else:
+                if warn_fuse[classes.tolist().index(class_folder)]:
+                    print(f"Some error images in {class_folder}, trying to coerce")
+                    warn_fuse[classes.tolist().index(class_folder)] = False
+                try:
+                    current_image = np.zeros(output.shape, dtype=np.uint8)
+                except Exception as e:
+                    print(traceback.format_exc())
+                    raise ValueError(f"Could not coerce {fn}: {str(e)}")
+            
+            if output is None:
+                output = np.zeros(current_image.shape, dtype=np.uint8)
+
+            # Flip pixel values if required
+            if flip:
+                current_image = np.where(current_image <= 0, 1, 0)
+
+            # Update output image with class index
+            class_idx = classes.tolist().index(class_folder) + 1
+            output = np.where(current_image > 0, class_idx, output)
+        except Exception as e:
+            raise ValueError(f"Could not process {fn}: {str(e)}")
+
+        outputs.append(Image.fromarray(output))
+
+    return outputs
+
+def old_loadClasses(folder_path, fns=None, flip=False):
     class_folders = sorted(os.listdir(folder_path))
     labels = []
     image_names = {}
