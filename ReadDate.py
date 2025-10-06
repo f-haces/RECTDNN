@@ -104,6 +104,25 @@ def extractDatesFromDict(mydict, keys, max_difference=3650):
 
     out_dates = {}
     for key in keys:
+        # for i in range(len(mydict[key]['dates'])):
+        #     out_dates[mydict[key]['dates'][i]] = mydict[key]['coords'][i]
+        out_dates[key] = mydict[key]
+    
+    return out_dates
+
+def extractDatesFromDict_legacy(mydict, keys, max_difference=3650):
+    if not keys in list(mydict.keys()):
+        print(f"Could not find key {keys} for current tile from options {list(mydict.keys())}, using closest date from all keys")
+        keys=0
+
+    if keys == 0:
+        keys = list(mydict.keys())
+    
+    if not isinstance(keys, list):
+        keys = [keys]
+
+    out_dates = {}
+    for key in keys:
         for i in range(len(mydict[key]['dates'])):
             out_dates[mydict[key]['dates'][i]] = mydict[key]['coords'][i]
     

@@ -243,6 +243,8 @@ class similarityTransformation:
         a = np.vstack((x_c, -1 * y_c, np.ones(x_c.shape), np.zeros(x_c.shape))).T
         b = np.vstack((y_c, x_c, np.zeros(x_c.shape), np.ones(x_c.shape))).T
 
+        """
+        REFACTOR FOR VROOM VROOM
         outl = list()
         for i in range(x_c.size):
             outl.append(a[i, :])
@@ -250,12 +252,19 @@ class similarityTransformation:
             
         # CONVERT LIST OF NP.ARRAYS TO NP.ARRAY
         A = np.array(outl)
+        """
+        A = np.empty((2 * x_c.size, 4), dtype=np.float64)
+        A[0::2, :] = a  # even rows → x-equations
+        A[1::2, :] = b  # odd rows  → y-equations
         
         # APPLY WEIGHTS IF PROVIDED
         if weights is not None:
-            W = np.diag(weights.flatten())
+            weights = np.array(weights).flatten()
+            # Repeat each weight twice (for x and y equations)
+            weights_expanded = np.repeat(weights, 2)
+            W = np.diag(weights_expanded)
         else:
-            W = np.eye(A.shape[0])  # Identity matrix for no weights (standard least squares)
+            W = np.eye(A.shape[0])
 
         # MODIFYED LEAST SQUARES SOLUTION WITH WEIGHTS
         AtW = A.T @ W
@@ -272,10 +281,15 @@ class similarityTransformation:
         self.rotation = np.arctan(self.b / self.a)
 
         # Apply rotation limit
-        if self.rotation_limit is not None and self.rotation > self.rotation_limit:
-            self.rotation = self.rotation_limit
-        elif self.rotation_limit is not None and self.rotation < -self.rotation_limit:
-            self.rotation = -self.rotation_limit
+        if self.rotation_limit is not None:
+            if self.rotation > self.rotation_limit:
+                self.rotation = self.rotation_limit
+            elif self.rotation < -self.rotation_limit:
+                self.rotation = -self.rotation_limit
+            
+            # Update a and b based on clamped rotation
+            self.a = self.scale * np.cos(self.rotation)
+            self.b = self.scale * np.sin(self.rotation)
         
         self.matrix = np.array([
             [self.a, -1 * self.b, self.x_translation], 

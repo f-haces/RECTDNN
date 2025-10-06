@@ -394,8 +394,8 @@ def loadClasses(folder_path, fns=None, flip=False):
     # If filenames are provided (fns), filter images accordingly
     if fns is not None:
         # Ensure `fns` is a set for faster lookup
-        fns_set = set([os.path.basename(fn) for fn in fns])
-        # print(fns_set)
+        fns_set = set([os.path.basename(fn).split(".")[0] for fn in fns])
+        print(fns_set)
         # Iterate over the class folders
         for class_folder in class_folders:
             class_folder_path = os.path.join(folder_path, class_folder)
@@ -406,8 +406,10 @@ def loadClasses(folder_path, fns=None, flip=False):
                 # print(image_files)
                 # Match filenames in `fns` regardless of their extensions
                 for file_name in image_files:
-                    # print(file_name)
+                    print(file_name)
                     base_name = os.path.splitext(file_name)[0]  # Extract base name without extension
+                    print(file_name)
+                    print(base_name)
                     if base_name in fns_set:
                         image_names[file_name] = class_folder
                         # print(image_names[file_name])
@@ -467,8 +469,10 @@ def loadClasses(folder_path, fns=None, flip=False):
             output = np.where(current_image > 0, class_idx, output)
         except Exception as e:
             raise ValueError(f"Could not process {fn}: {str(e)}")
-
-        outputs.append(Image.fromarray(output))
+        print(np.max(output))
+        print(output.dtype)
+        outputs.append(Image.fromarray(output.astype(np.uint8)))
+        print(np.max(np.asarray(outputs[-1])))
 
     return outputs
 

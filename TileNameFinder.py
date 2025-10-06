@@ -159,7 +159,8 @@ def secondaryNameFinding(image_text, bbox, key, found_threshold, reader, verbose
 def smartifyDict(gen_dict, basepath, reader,
                  found_threshold=60,
                  verbose=5,
-                 smart_dict = None
+                 smart_dict = None,
+                 diagnostics=False,
                  ):
     """
     gen_dict  = From previous reading
@@ -250,6 +251,11 @@ def smartifyDict(gen_dict, basepath, reader,
                     smart_dict[tilename][0]['confidence'] = vv['confidence']
                     smart_dict[tilename][0]['initialtexts'] = texts
                     smart_dict[tilename][0]['secondtexts'] = secondtextsfound
+                elif diagnostics:
+                    smart_dict[tilename][inner_key]['data'] = image
+                    smart_dict[tilename][inner_key]['confidence'] = vv['confidence']
+                    smart_dict[tilename][inner_key]['initialtexts'] = texts
+                    # smart_dict[tilename][inner_key]['secondtexts'] = secondtextsfound
 
                 if dates_found is None:
                     date = None

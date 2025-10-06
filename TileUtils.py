@@ -118,45 +118,6 @@ def getIndivDict(a, index):
         out.append({'tile' : k, 'index' : index, 'coords' : v['coords'], })
     return out
 
-"""
-def findBounds(image_fn, model=None, 
-        model_weights=f"{data_dir}RLNN/weights050124.pt",
-        creation_params=None,
-        device="cpu",
-        verbose=True
-        ):
-    
-    if creation_params is None:
-        target_size = 512
-        original_shapes = []
-
-        # COCO DATASET PARAMS
-        category_labels = {
-            0 : "County",
-            1 : "Tile",
-            2 : "Box",
-            3 : "Legend"
-        }
-
-        categories=[0, 1]
-
-    input_folder = os.path.dirname(os.path.abspath(image_fn))
-
-    # Initialize model
-    if model is None:
-        model = ultralytics.YOLO(model_weights).to("cpu")
-
-    model = model.to(device)
-    
-    results = model(image_fn, imgsz=target_size, verbose=verbose)
-
-    if device == "cuda":
-        results = [result.cpu() for result in results]
-        model   = model.to("cpu")
-
-    return results, model
-"""
-
 def bbox_to_polygon(bbox):
     # Function to convert [left, bottom, right, top] to a shapely Polygon
     if len(bbox) == 0:
@@ -485,21 +446,31 @@ def buildWorldFileDatabase(input_dir, db, stateplanes):
 
     return df
 
-def enlarged_bounds(raster, n=1):
+def enlarged_bounds(rasters, n=1):
     """
-    Returns an enlarged shapely box of the bounds of the given raster.
+    Returns an enlarged shapely box that contains the bounds of all input rasters.
     
     Parameters:
-    raster (rasterio.io.DatasetReader): The input raster.
-    n (float): The factor by which to enlarge the bounds. n=1 means the same size, n=2 means twice as big, etc.
+    rasters (rasterio.io.DatasetReader or list): The input raster or a list of rasters.
+    n (float): The factor by which to enlarge the combined bounds. n=1 means the same size, n=2 means twice as big, etc.
     
     Returns:
     shapely.geometry.polygon.Polygon: The enlarged bounding box.
     """
-    # Get the bounds of the raster
-    minx, miny, maxx, maxy = raster.bounds
+    # Ensure the input is a list
+    if not isinstance(rasters, list):
+        rasters = [rasters]
+    
+    # Combine all raster bounds into a single bounding box
+    minx, miny, maxx, maxy = rasters[0].bounds
+    for raster in rasters[1:]:
+        r_minx, r_miny, r_maxx, r_maxy = raster.bounds
+        minx = min(minx, r_minx)
+        miny = min(miny, r_miny)
+        maxx = max(maxx, r_maxx)
+        maxy = max(maxy, r_maxy)
 
-    # Calculate the center of the bounding box
+    # Calculate the center of the combined bounding box
     center_x = (minx + maxx) / 2
     center_y = (miny + maxy) / 2
 
@@ -507,7 +478,7 @@ def enlarged_bounds(raster, n=1):
     width = (maxx - minx) * n
     height = (maxy - miny) * n
 
-    # Calculate the new bounds
+    # Calculate the new enlarged bounds
     new_minx = center_x - width / 2
     new_miny = center_y - height / 2
     new_maxx = center_x + width / 2
@@ -517,6 +488,7 @@ def enlarged_bounds(raster, n=1):
     enlarged_box = box(new_minx, new_miny, new_maxx, new_maxy)
     
     return enlarged_box
+
 
 def plotICP_streets(reprojected_points, initial=None, plot_skip=2, best=None, dpi=200, figsize=(10, 10)):
     # print(initial)
@@ -773,243 +745,6 @@ def performICPonTile_roads(TLNN, STCN,
 
     return best_transform, transform_dict
 
-'''
-def findRoads(image, model=None, num_classes=2, num_pyramids=2,
-                cnn_run_params=None, cnn_creation_params=None, device="cuda",
-                model_checkpoint=f"{data_dir}/FANN/checkpoint_101023.pth"):
-    
-    if cnn_run_params is None:
-        cnn_run_params = {
-            "tilesize"   : 2048,
-            "edges"      : 0,
-            "dims_rep"   : None,
-            "n_pyramids" : num_pyramids,
-            "num_dim"    : num_classes,
-            "device"     : device
-        }
-    
-    if cnn_creation_params is None:
-        cnn_creation_params = {
-            "num_classes" : num_classes,
-            "inputsize"   : num_pyramids,
-        }
-    
-    # Input handling
-    if isinstance(image, np.ndarray):
-        image = [image] # Make iterable if needed
-    
-    # Initialize model if needed
-    if model is None:
-        model = TPNN(**cnn_creation_params)
-        model.load_state_dict(torch.load(model_checkpoint)['model_state_dict'])
-    model = model.to(device)
-    
-    # PROCESS IMAGE
-    for im in image:
-        outputs, _ = split_and_run_cnn(im, model, **cnn_run_params)
-    
-    # background, grid, roads = outputs[:, :, 0], outputs[:, :, 1], outputs[:, :, 2]
-    
-    model = model.to("cpu")
-    torch.cuda.empty_cache()
-    
-    outputs = outputs * 255
-    outputs = outputs.astype(np.uint8)
-    
-    # return (background.T, grid.T, roads.T), model
-    return outputs, model
-
-def findBounds(image_fn, model=None, 
-        model_weights=f"{data_dir}RLNN/weights050124.pt",
-        creation_params=None,
-        device="cpu",
-        ):
-    
-    if creation_params is None:
-        target_size = 512
-        original_shapes = []
-
-        # COCO DATASET PARAMS
-        category_labels = {
-            0 : "County",
-            1 : "Tile",
-            2 : "Box",
-            3 : "Legend"
-        }
-
-        categories=[0, 1]
-
-    input_folder = os.path.dirname(os.path.abspath(image_fn))
-
-    # Initialize model
-    if model is None:
-        model = ultralytics.YOLO(model_weights).to("cpu")
-
-    model = model.to(device)
-    
-    results = model(image_fn, imgsz=target_size)
-
-    return results, model
-
-
-def getRoadPoints(fn, model=None):
-    # LOAD IMAGE AS NUMPY ARRAY
-    image = np.asarray(cv2.imread(fn))
-
-    # RUN CNN
-    out, FANN = findRoads(image, model=model)
-
-    # RUN YOLO
-    outbbox, RLNN = findBounds(fn)
-
-    # REMOVE ANY CNN OUTSIDE BOUNDS
-    bounds = outbbox[0].boxes.xyxy.numpy().astype(np.int32).flatten()
-    mask  = np.zeros(out.shape)
-    mask[bounds[1]:bounds[3], bounds[0]:bounds[2], :] = 1
-    out = out * mask
-    out = out.astype(np.uint8)
-
-    # THIN CNN OUTPUTS
-    thin = cv2.ximgproc.thinning(out[:, :, 1], thinningType=cv2.ximgproc.THINNING_GUOHALL)
-
-    # OUTPUT X AND Y
-    y, x = np.where(np.asarray(thin > 0))
-
-    out_struct = {
-        "x" : x,
-        "y" : y,
-        "FANN" : FANN,
-        "RLNN" : RLNN,
-        "thin" : thin,
-        "raw"  : out,
-        "bbox" : outbbox
-    }
-    
-    return out_struct
-
-def findIntersections(lines):
-    intersections = []
-    for i in tqdm(range(len(lines))):
-        for j in range(i+1, len(lines)):
-            line1 = lines[i][0]
-            line2 = lines[j][0]
-
-            x1, y1, x2, y2 = line1
-            x3, y3, x4, y4 = line2
-
-            # Calculate intersection point
-            denominator = ((x1 - x2) * (y3 - y4)) - ((y1 - y2) * (x3 - x4))
-            if denominator != 0:
-                intersect_x = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / denominator
-                intersect_y = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / denominator
-
-                # Add intersection point to list
-                intersections.append((int(intersect_x), int(intersect_y)))
-    return intersections
-
-def findInetersections_vectorized(lines):
-    intersections = []
-
-    # Convert lines to numpy array for easier manipulation
-    lines = lines[:, 0, :]  # Extracting the lines from the unnecessary dimensions
-
-    # Extracting line coordinates
-    x1, y1, x2, y2 = lines[:, 0], lines[:, 1], lines[:, 2], lines[:, 3]
-
-    # Reshaping to make calculations easier
-    x1, y1, x2, y2 = x1.reshape(-1, 1), y1.reshape(-1, 1), x2.reshape(-1, 1), y2.reshape(-1, 1)
-
-    # Calculate differences and determinants
-    dx, dy = x2 - x1, y2 - y1
-    det = dx * dy[:, np.newaxis] - dy * dx[:, np.newaxis]
-
-    # Check for non-parallel lines
-    non_parallel_mask = det != 0
-
-    # Calculate intersection points
-    intersect_x = ((x1 * y2 - y1 * x2) * dx - (x1 - x2) * (x1 * dy - y1 * dx)) / det
-    intersect_y = ((x1 * y2 - y1 * x2) * dy - (y1 - y2) * (x1 * dy - y1 * dx)) / det
-
-    # Check for valid intersections
-    valid_mask = (intersect_x >= 0) & (intersect_y >= 0) & (intersect_x < image.shape[1]) & (intersect_y < image.shape[0])
-
-    # Filter out invalid intersections and non-parallel lines
-    valid_intersections = np.column_stack((intersect_x[valid_mask & non_parallel_mask], intersect_y[valid_mask & non_parallel_mask]))
-
-    # Convert intersection points to integer coordinates
-    valid_intersections = valid_intersections.astype(int)
-
-    # Remove duplicate intersections
-    valid_intersections = np.unique(valid_intersections, axis=0)
-
-    return valid_intersections
-
-def toTF(a):
-    a[a > 0] = 1
-    a[a <= 0] = 0
-    return a
-
-def filterIntersections(inters, lines, fn):
-    # APPROACH WITH IMAGE FILTERING. DOESNT WORK
-    image_filter = np.asarray(cv2.imread(fn) * 0)
-    inter_filter = np.asarray(cv2.imread(fn) * 0)[:, :, 0]
-
-    # Plot the lines
-    for line in lines:
-        x1, y1, x2, y2 = line[0]
-        cv2.line(image_filter, (x1, y1), (x2, y2), (255, 255, 255), 2)
-
-    image_filter = image_filter[:, :, 0]
-    # CREATE IMAGE MASK
-    # Extract x, y coordinates of intersection points
-    x_coords, y_coords = zip(*inters)
-    # Set the intersection points to white (255) in the mask
-    inter_filter[y_coords, x_coords] = 255
-    print(inter_filter.shape)
-    print(image_filter.shape)
-
-
-    return toTF(image_filter) * toTF(inter_filter)
-
-def findInetersections_shapely(lines): 
-    line_strings = [LineString([(line[0][0], line[0][1]), (line[0][2], line[0][3])]) for line in lines]
-
-    # Create a GeoDataFrame with LineString objects
-    gdf = gpd.GeoDataFrame(geometry=line_strings)
-
-    # Calculate intersections
-    temp = gdf.unary_union.intersection(gdf.geometry)
-    intersection_points = gpd.GeoSeries([point for point in temp if isinstance(point, MultiPoint) or isinstance(point, Point)])
-    intersections = gpd.GeoDataFrame(geometry=intersection_points.explode(index_parts=False)).reset_index(drop=True)
-    return intersections
-
-fn = tiles[4]
-points = getRoadPoints(fn, )
-
-image = np.asarray(cv2.imread(fn))
-
-# Perform Hough Line Transform
-lines  = cv2.HoughLinesP(points['thin'], 1, np.pi/720, threshold=20, minLineLength=20, maxLineGap=50)
-inters = findInetersections_shapely(lines)
-
-# Plot the lines
-for line in lines:
-    x1, y1, x2, y2 = line[0]
-    cv2.line(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-# Convert BGR image to RGB for plotting
-image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-plt.imshow(image_rgb)
-
-
-fig, ax = plt.subplots(figsize=(10, 10), dpi=300)
-ax.imshow(image_rgb)
-ax.scatter(inters.geometry.x.tolist(), inters.geometry.y.tolist(), marker='x', s=0.5)
-fig.savefig("test.png")
-
-'''
-
 def calcCenter(a):
     # CALCULATES CENTER OF BOUNDING BOX IN FORM X1 Y1 X2 Y2
     return (a[0] + a[2]) / 2, (a[1] + a[3]) / 2
@@ -1043,15 +778,21 @@ def cleanImageBBOX(image, bbox, rep_value = 0, add=100):
     image[:, bbox[2]-add:] = rep_value
     return image
 
-def cleanCenterBBOX(coords, bbox):
+def cleanCenterBBOX(coords, bbox, opt_return=[]):
     # RETURNS ONLY BOUNDING BOXES WITHIN A GIVEN, LARGER BOUNDING BOX
     x1, y1, x2, y2 = bbox
     
     # Check which coordinates are within the bounding box limits
     mask = (coords[:, 0] >= x1) & (coords[:, 0] <= x2) & (coords[:, 1] >= y1) & (coords[:, 1] <= y2)
     
+    out_l = []
+    for a in opt_return:
+        out_l.append(a[mask])
+
     # Filter the coordinates using the mask
-    return coords[mask]
+    if len(out_l) == 0:
+        return coords[mask]
+    return coords[mask], *out_l
 
 def getClosestPoints(kdtrees, proc_points, sear_points, weights=None, proc_limit=1000, idx=None, dist_threshold=None):
     assert len(kdtrees) == len(proc_points)
@@ -1342,12 +1083,14 @@ def processHalfSize(tiles, half_path):
             half = cv2.resize(a,  (0, 0), fx=0.5, fy=0.5)
             cv2.imwrite(half_out_fn, half)
 
+def get_largest_subdirectory(base_dir):
+    subdirs = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
+    numbered_subdirs = [(d, int(d.replace('exp', ''))) for d in subdirs if d.startswith('exp') and d[3:].isdigit()]
+    largest_subdir = max(numbered_subdirs, key=lambda x: x[1])[0] if numbered_subdirs else "exp"
+    return os.path.join(base_dir, largest_subdir)
+
 def processSAHIresults(yolo_path, streetcorner_out_fn):
-    def get_largest_subdirectory(base_dir):
-        subdirs = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
-        numbered_subdirs = [(d, int(d.replace('exp', ''))) for d in subdirs if d.startswith('exp') and d[3:].isdigit()]
-        largest_subdir = max(numbered_subdirs, key=lambda x: x[1])[0] if numbered_subdirs else None
-        return os.path.join(base_dir, largest_subdir)
+
 
     pkldir    = os.path.join(get_largest_subdirectory(yolo_path), "pickles\\")
     print(f"Reading results from: {pkldir}" )
@@ -1402,8 +1145,10 @@ def processTiledYOLOs(tiles, model_paths, out_dict_names, proc_dir, imsizes):
                             return_dict=True, 
                             export_pickle=True,
                             visual_hide_labels=True)
-            
-            curr_dict = processSAHIresults(yolo_path, out_fn)
+
+            dict_dir =  os.path.join(proc_dir, out_dict_names[i]+".pkl")
+            print(f"Exporting to {dict_dir}")
+            curr_dict = processSAHIresults(yolo_path, dict_dir)
         else:
             print(f"Reading from {out_fn}")
             curr_dict = pickle.load(open(out_fn, "rb"))

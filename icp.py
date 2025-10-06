@@ -69,17 +69,19 @@ def plotICP(reprojected_points, initial_points, plot_skip=2, best=None):
     fig, ax = plt.subplots()
     colormap = plt.get_cmap('cool') 
 
-    ax.scatter(initial_points['shp'][:, 0], initial_points['shp'][:, 1], color=colormap(0), s=1, label="Initial")
-    ax.scatter(initial_points['ras'][:, 0], initial_points['ras'][:, 1], color="black", s=1)
+    ax.scatter(initial_points['shp'][:, 0], initial_points['shp'][:, 1], color=colormap(0), s=0.5, label="Reference")
 
     for i in np.arange(plot_skip, icp_iterations, plot_skip):
         ax.scatter(reprojected_points[i][:, 0], reprojected_points[i][:, 1], 
             color=colormap(i / icp_iterations), s=0.3, label=f"Iteration {i}")
 
+
+    ax.scatter(initial_points['ras'][:, 0], initial_points['ras'][:, 1], color="black", s=5, label="Detections")
+
     if best is not None:
-        ax.scatter(best[:, 0], best[:, 1], color='red', s=1, marker='x', label="Best Fit")
+        ax.scatter(best[:, 0], best[:, 1], color='red', s=5, marker='x', label="Best Fit")
         
-    ax.legend()
+    ax.legend(loc='lower left')
     ax.grid()
     ax.axis("equal")
     return ax

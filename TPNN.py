@@ -105,7 +105,7 @@ class SpatialAttention(nn.Module):
 
 class TPNN(nn.Module):
 
-    def __init__(self, num_classes=2, finalpadding=0, inputsize=1, verbose_level=1):
+    def __init__(self, num_classes=2, finalpadding=0, inputsize=1, verbose_level=1, legacy=False):
         super(TPNN, self).__init__()
         
         self.num_classes = num_classes
@@ -138,7 +138,10 @@ class TPNN(nn.Module):
         self.decoder4 = self._make_decoder_block(512, 256, 256)
         self.decoder3 = self._make_decoder_block(512, 128, 128)
         self.decoder2 = self._make_decoder_block(256, 64, 64)
-        self.decoder1 = nn.Sequential(self._make_decoder_block(128, 64, 64), self._make_decoder_block(64, 64, 64))
+        if legacy:
+            self.decoder1 = self._make_decoder_block(128, 64, 64, s=4)
+        else:
+            self.decoder1 = nn.Sequential(self._make_decoder_block(128, 64, 64), self._make_decoder_block(64, 64, 64))
         
         # Final convolutional layer
         self.final_conv = nn.Conv2d(64, num_classes, kernel_size=1, padding=finalpadding)

@@ -400,7 +400,7 @@ def findCounty(image, model=None,
     return outputs, model
 
 def findKeypoints(image, model=None, num_classes=5, num_pyramids=3,
-                cnn_run_params=None, cnn_creation_params=None, device="cuda",
+                cnn_run_params=None, cnn_creation_params=None, device="cuda", legacy=False,
                 model_checkpoint=f"{data_dir}TPNN/checkpoint_091523_pyramids_2.pth"):
     
     if cnn_run_params is None:
@@ -418,6 +418,7 @@ def findKeypoints(image, model=None, num_classes=5, num_pyramids=3,
         cnn_creation_params = {
             "num_classes" : num_classes,
             "inputsize"   : num_pyramids,
+            "legacy"      : legacy
         }
     
     # Input handling
@@ -640,7 +641,8 @@ def performICPonIndex_ori(boundaries, dnn_outputs,
 
 def performICPonIndex(boundaries, dnn_outputs,
                debug=False, plot=True, icp_iterations=30, proc_limit=1000,
-               rotation=True, shear=False, perspective=False, verbose=True
+               rotation=True, shear=False, perspective=False, verbose=True, 
+               plot_every=5
                ):
     '''
     ICP
@@ -761,7 +763,7 @@ def performICPonIndex(boundaries, dnn_outputs,
         plt.show()
 
     if plot:
-        plotICP(reprojected_points, initial_points, plot_skip=5, best=best_points)
+        plotICP(reprojected_points, initial_points, plot_skip=plot_every, best=best_points)
         plt.show()
     
     transform_dict = {
@@ -988,7 +990,7 @@ def saveTiles(tiles, output_image_fn):
             continue
 
 
-def runTLNN(filename, outputs_dir, TLNN=None):
+def runTLNN(filename, outputs_dir, TLNN=None, save=False):
     if TLNN is None:
         TLNN = {
             "tile"      : {"model" : None, "keyed_text" : True,  "model_weights" : f"{data_dir}BBNN/TileBBNN.pt"}, 
@@ -1001,9 +1003,12 @@ def runTLNN(filename, outputs_dir, TLNN=None):
     for i, (k,v) in enumerate(TLNN.items()):
         
         # OUTPUT FILE
-        save_dir = os.path.join(outputs_dir, os.path.basename(filename).split(".")[0] + f"_{k}BBNN.tif")
+        if save:
+            save_dir = os.path.join(outputs_dir, os.path.basename(filename).split(".")[0] + f"_{k}BBNN.tif")
+        else:
+            save_dir=None
         
-        results, model = runYOLO_Text(filename, save_dir=None, **v)
+        results, model = runYOLO_Text(filename, save_dir=save_dir, **v)
         outputs[k] = results
         
         # UPDATE WITH MODEL 
